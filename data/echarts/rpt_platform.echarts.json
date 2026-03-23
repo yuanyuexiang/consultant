@@ -1,0 +1,230 @@
+{
+  "id": "rpt_platform",
+  "name": "Platform Overview",
+  "type": "platform_overview",
+  "project_id": "proj_mock",
+  "status": "draft",
+  "sections": [
+    {
+      "id": "sec_pb",
+      "section_key": "peer_benchmark",
+      "title": "Peer Benchmark",
+      "subtitle": null,
+      "status": "completed",
+      "order": 4,
+      "content": "{{chart:pb_1}}",
+      "content_items": {
+        "charts": [
+          {
+            "chart_id": "pb_1",
+            "chart_type": "table",
+            "title": "Peer Benchmark - Detailed Comparison Table",
+            "subtitle": "Extracted from legacy squirrel-be chart3_peer_benchmark.html",
+            "table": {
+              "columns": [
+                {
+                  "key": "col_0",
+                  "title": "Deal Name",
+                  "align": "left"
+                },
+                {
+                  "key": "col_1",
+                  "title": "Transaction Date",
+                  "align": "center"
+                },
+                {
+                  "key": "col_2",
+                  "title": "Pool Balance ($)",
+                  "align": "right"
+                },
+                {
+                  "key": "col_3",
+                  "title": "Number of Loans",
+                  "align": "right"
+                },
+                {
+                  "key": "col_4",
+                  "title": "Avg Loan Balance ($)",
+                  "align": "right"
+                },
+                {
+                  "key": "col_5",
+                  "title": "Wtd Avg Coupon (%)",
+                  "align": "right"
+                },
+                {
+                  "key": "col_6",
+                  "title": "Wtd Avg FICO",
+                  "align": "right"
+                },
+                {
+                  "key": "col_7",
+                  "title": "Wtd Avg Original Term (mths)",
+                  "align": "right"
+                },
+                {
+                  "key": "col_8",
+                  "title": "Wtd Avg Remaining Term (mths)",
+                  "align": "right"
+                },
+                {
+                  "key": "col_9",
+                  "title": "Wtd Avg Seasoning",
+                  "align": "right"
+                },
+                {
+                  "key": "col_10",
+                  "title": "Rating Agency Base Case CNL (%)",
+                  "align": "right"
+                }
+              ],
+              "rows": [
+                {
+                  "_row_id": "row_1",
+                  "col_0": "NovaFin 2025-1",
+                  "col_1": "2025-05-12",
+                  "col_2": 345123300,
+                  "col_3": 24615,
+                  "col_4": 14021,
+                  "col_5": 14.5,
+                  "col_6": 717,
+                  "col_7": 48,
+                  "col_8": 47,
+                  "col_9": 1,
+                  "col_10": 13.85
+                },
+                {
+                  "_row_id": "row_2",
+                  "col_0": "BHG 2025-2CON",
+                  "col_1": "2025-08-14",
+                  "col_2": 400144100,
+                  "col_3": 4296,
+                  "col_4": 93143,
+                  "col_5": 18.32,
+                  "col_6": 733,
+                  "col_7": 101,
+                  "col_8": 100,
+                  "col_9": 1,
+                  "col_10": 12.36
+                },
+                {
+                  "_row_id": "row_3",
+                  "col_0": "Foundation Finance Trust 2025-2",
+                  "col_1": "2025-07-08",
+                  "col_2": 332551200,
+                  "col_3": 16633,
+                  "col_4": 19993,
+                  "col_5": 12.56,
+                  "col_6": 736,
+                  "col_7": 135,
+                  "col_8": 133,
+                  "col_9": 2,
+                  "col_10": 7.72
+                },
+                {
+                  "_row_id": "row_4",
+                  "col_0": "GreenSky Home Improvement Issuer Trust 2025-2",
+                  "col_1": "2025-07-22",
+                  "col_2": 750010000,
+                  "col_3": 55194,
+                  "col_4": 13589,
+                  "col_5": 13.13,
+                  "col_6": 781,
+                  "col_7": 113.7,
+                  "col_8": 106.4,
+                  "col_9": 7,
+                  "col_10": 5.8
+                },
+                {
+                  "_row_id": "row_5",
+                  "col_0": "ACHV 2024-1PL",
+                  "col_1": "2024-03-18",
+                  "col_2": 232348200,
+                  "col_3": 10757,
+                  "col_4": 21600,
+                  "col_5": 20.08,
+                  "col_6": 710,
+                  "col_7": 51,
+                  "col_8": 46.5,
+                  "col_9": 4.5,
+                  "col_10": 13.03
+                },
+                {
+                  "_row_id": "row_6",
+                  "col_0": "UPST 2023-3",
+                  "col_1": "2023-11-06",
+                  "col_2": 263159100,
+                  "col_3": 29026,
+                  "col_4": 9066,
+                  "col_5": 21.35,
+                  "col_6": 683,
+                  "col_7": 58,
+                  "col_8": 52.1,
+                  "col_9": 5.9,
+                  "col_10": 17.15
+                },
+                {
+                  "_row_id": "row_7",
+                  "col_0": "Reach ABS 2024-1",
+                  "col_1": "2024-02-05",
+                  "col_2": 250327300,
+                  "col_3": 18567,
+                  "col_4": 13482,
+                  "col_5": 22.22,
+                  "col_6": 592,
+                  "col_7": 53,
+                  "col_8": 50,
+                  "col_9": 4,
+                  "col_10": 12.89
+                }
+              ]
+            },
+            "meta": {
+              "source": "squirrel-be/extracted_charts/chart3_peer_benchmark.html"
+            }
+          }
+        ],
+        "kind": null,
+        "items": null
+      }
+    },
+    {
+      "id": "sec_ds",
+      "section_key": "deal_summary",
+      "title": "Deal Summary",
+      "subtitle": null,
+      "status": "pending",
+      "order": 5,
+      "content": null,
+      "content_items": {
+        "charts": [],
+        "kind": "text_blocks",
+        "items": [
+          {
+            "type": "paragraph",
+            "text": "Mock content for Deal Summary."
+          }
+        ]
+      }
+    },
+    {
+      "id": "sec_tc",
+      "section_key": "testing_chart",
+      "title": "Testing Chart",
+      "subtitle": null,
+      "status": "pending",
+      "order": 6,
+      "content": null,
+      "content_items": {
+        "charts": [],
+        "kind": "text_blocks",
+        "items": [
+          {
+            "type": "paragraph",
+            "text": "Mock content for Testing Chart."
+          }
+        ]
+      }
+    }
+  ]
+}
