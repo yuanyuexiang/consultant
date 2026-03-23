@@ -51,3 +51,30 @@ class ReportPayloadData(BaseModel):
 class SectionPayloadData(BaseModel):
     section_key: str
     section: dict[str, Any]
+
+
+class ReportCreateRequest(BaseModel):
+    report_key: str
+    id: str | None = None
+    name: str
+    type: str = "analytics"
+    status: str = "draft"
+    sections: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReportUpdateRequest(BaseModel):
+    name: str | None = None
+    type: str | None = None
+    status: str | None = None
+    sections: list[dict[str, Any]] | None = None
+
+
+class ReportMutationData(BaseModel):
+    report_key: str
+    snapshot_id: int
+    payload_hash: str
+
+
+class DeleteReportData(BaseModel):
+    report_key: str
+    deleted: bool

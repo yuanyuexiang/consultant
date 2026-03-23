@@ -10,11 +10,15 @@ from app.schemas.common import ApiResponse, ErrorDetail
 from app.schemas.report import (
     AssembleData,
     AssembleRequest,
+    DeleteReportData,
     PublishData,
     PublishRequest,
+    ReportCreateRequest,
     ReportListData,
     ReportListItem,
+    ReportMutationData,
     ReportPayloadData,
+    ReportUpdateRequest,
     SectionPayloadData,
     UploadExcelData,
 )
@@ -35,6 +39,90 @@ def _error(status_code: int, code: int, field: str, detail: str) -> HTTPExceptio
         error=ErrorDetail(field=field, detail=detail),
     ).model_dump()
     return HTTPException(status_code=status_code, detail=payload)
+
+
+@router.post("", response_model=ApiResponse[ReportMutationData])
+def create_report(req: ReportCreateRequest):
+    if repo.exists_report(req.report_key):
+        raise _error(409, 1003, "report_key", f"report already exists: {req.report_key}")
+
+    payload = {
+        "id": req.id or f"rpt_{req.report_key.replace('-', '_')}",
+        "report_key": req.report_key,
+        "name": req.name,
+        "type": req.type,
+        "status": req.status,
+        "published_version": 0,
+        "sections": req.sections,
+    }
+
+    snapshot_id = repo.next_snapshot_id()
+    digest = payload_hash(payload)
+    repo.save_snapshot(req.report_key, snapshot_id, digest, payload, "manual-create")
+    repo.upsert_report_index(
+        req.report_key,
+        snapshot_id,
+        payload,
+        status=req.status,
+        published_version=0,
+    )
+
+    return ApiResponse(
+        data=ReportMutationData(
+            report_key=req.report_key,
+            snapshot_id=snapshot_id,
+            payload_hash=digest,
+        )
+    )
+
+
+@router.patch("/{report_key}", response_model=ApiResponse[ReportMutationData])
+def update_report(report_key: str, req: ReportUpdateRequest):
+    try:
+        info = repo.get_report_info(report_key)
+        current_snapshot_id = int(info["snapshot_id"])
+        snap = repo.load_snapshot(report_key, current_snapshot_id)
+    except FileNotFoundError as exc:
+        raise _error(404, 1004, "report_key", str(exc)) from exc
+
+    payload = snap["payload"]
+    if req.name is not None:
+        payload["name"] = req.name
+    if req.type is not None:
+        payload["type"] = req.type
+    if req.status is not None:
+        payload["status"] = req.status
+    if req.sections is not None:
+        payload["sections"] = req.sections
+
+    snapshot_id = repo.next_snapshot_id()
+    digest = payload_hash(payload)
+    repo.save_snapshot(report_key, snapshot_id, digest, payload, "manual-update")
+    repo.upsert_report_index(
+        report_key,
+        snapshot_id,
+        payload,
+        status=payload.get("status", info.get("status", "draft")),
+        published_version=int(info.get("published_version", 0)),
+    )
+
+    return ApiResponse(
+        data=ReportMutationData(
+            report_key=report_key,
+            snapshot_id=snapshot_id,
+            payload_hash=digest,
+        )
+    )
+
+
+@router.delete("/{report_key}", response_model=ApiResponse[DeleteReportData])
+def delete_report(report_key: str):
+    try:
+        repo.delete_report(report_key)
+    except FileNotFoundError as exc:
+        raise _error(404, 1004, "report_key", str(exc)) from exc
+
+    return ApiResponse(data=DeleteReportData(report_key=report_key, deleted=True))
 
 
 @router.post("/upload-excel", response_model=ApiResponse[UploadExcelData])

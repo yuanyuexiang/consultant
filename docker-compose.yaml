@@ -1,7 +1,7 @@
 services:
   consultant:
     container_name: consultant
-    image: ${DOCKER_IMAGE_TAG}
+    image: yuanyuexiang/consultant:v1
     restart: always
     ports:
       - "8000"

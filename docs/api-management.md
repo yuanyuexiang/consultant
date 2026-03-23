@@ -5,7 +5,8 @@ This document is for the frontend management console integration.
 ## 1. Base Info
 
 - Base URL: `http://127.0.0.1:8000`
-- Swagger: `http://127.0.0.1:8000/docs`
+- API Prefix: `/consultant/api`
+- Swagger: `http://127.0.0.1:8000/consultant/docs`
 - Content-Type:
   - `multipart/form-data` for upload
   - `application/json` for other APIs
@@ -29,7 +30,7 @@ Sample file in this repository:
 Upload command:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/v1/reports/upload-excel" \
+curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/upload-excel" \
   -F "file=@data/Slide 4 Origination Trends.xlsx" \
   -F "report_key=data-analytics"
 ```
@@ -64,7 +65,7 @@ Success response example:
 Command:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/v1/reports/assemble" \
+curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/assemble" \
   -H "Content-Type: application/json" \
   -d '{"report_key":"data-analytics"}'
 ```
@@ -100,7 +101,7 @@ Success response example:
 Command:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/v1/reports/data-analytics/publish" \
+curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics/publish" \
   -H "Content-Type: application/json" \
   -d '{"snapshot_id":10001,"comment":"first publish"}'
 ```
@@ -127,7 +128,7 @@ Success response example:
 - Endpoint: `GET /v1/reports`
 
 ```bash
-curl "http://127.0.0.1:8000/v1/reports"
+curl "http://127.0.0.1:8000/consultant/api/v1/reports"
 ```
 
 ### 5.2 Get Published Report Payload
@@ -135,7 +136,7 @@ curl "http://127.0.0.1:8000/v1/reports"
 - Endpoint: `GET /v1/reports/{report_key}`
 
 ```bash
-curl "http://127.0.0.1:8000/v1/reports/data-analytics"
+curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics"
 ```
 
 ### 5.3 Get One Section
@@ -143,19 +144,58 @@ curl "http://127.0.0.1:8000/v1/reports/data-analytics"
 - Endpoint: `GET /v1/reports/{report_key}/sections/{section_key}`
 
 ```bash
-curl "http://127.0.0.1:8000/v1/reports/data-analytics/sections/origination_trends"
+curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics/sections/origination_trends"
 ```
 
-## 6. Recommended Call Sequence
+## 6. Report CRUD APIs
+
+### 6.1 Create Report
+
+- Endpoint: `POST /v1/reports`
+
+```bash
+curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "report_key": "crud-demo",
+    "name": "CRUD Demo",
+    "type": "analytics",
+    "status": "draft",
+    "sections": []
+  }'
+```
+
+### 6.2 Update Report
+
+- Endpoint: `PATCH /v1/reports/{report_key}`
+
+```bash
+curl -X PATCH "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "CRUD Demo Updated",
+    "status": "published"
+  }'
+```
+
+### 6.3 Delete Report
+
+- Endpoint: `DELETE /v1/reports/{report_key}`
+
+```bash
+curl -X DELETE "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo"
+```
+
+## 7. Recommended Call Sequence
 
 1. Upload Excel
 2. Assemble report
 3. Publish snapshot
 4. Query report/section for frontend rendering
 
-## 7. Common Error Cases
+## 8. Common Error Cases
 
-### 7.1 Wrong File Type
+### 8.1 Wrong File Type
 
 - Condition: upload non-`.xlsx`
 - Example:
@@ -172,7 +212,7 @@ curl "http://127.0.0.1:8000/v1/reports/data-analytics/sections/origination_trend
 }
 ```
 
-### 7.2 Parsed Data Missing
+### 8.2 Parsed Data Missing
 
 - Condition: call assemble before upload
 - Example:
@@ -189,7 +229,7 @@ curl "http://127.0.0.1:8000/v1/reports/data-analytics/sections/origination_trend
 }
 ```
 
-### 7.3 Snapshot Not Found
+### 8.3 Snapshot Not Found
 
 - Condition: publish with wrong `snapshot_id`
 - Example:
