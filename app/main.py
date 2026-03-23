@@ -4,8 +4,13 @@ from fastapi.responses import JSONResponse
 from app.api.v1.reports import router as report_router
 from app.schemas.common import ApiResponse
 
-app = FastAPI(title="Report Platform Backend", version="0.1.0")
-app.include_router(report_router)
+app = FastAPI(
+    title="Report Platform Backend", 
+    version="0.1.0",
+    docs_url="/consultant/docs",
+    openapi_url="/consultant/openapi.json",
+    )
+app.include_router(report_router, prefix="/consultant/api")
 
 
 @app.get("/health", response_model=ApiResponse[dict])
