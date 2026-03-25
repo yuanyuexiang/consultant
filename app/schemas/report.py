@@ -16,6 +16,7 @@ class ReportListItem(BaseModel):
     name: str
     type: str
     status: str
+    updated_at: str | None = None
 
 
 class ReportListData(BaseModel):

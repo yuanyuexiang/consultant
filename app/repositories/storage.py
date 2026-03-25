@@ -100,6 +100,7 @@ class StorageRepository:
                     "name": info.get("name", report_key),
                     "type": info.get("type", "analytics"),
                     "status": info.get("status", "active"),
+                    "updated_at": info.get("updated_at"),
                 }
             )
         return sorted(items, key=lambda x: x["report_key"])
