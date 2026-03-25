@@ -24,6 +24,7 @@ uv run uvicorn app.main:app --reload
 - Swagger: http://127.0.0.1:8000/consultant/docs
 - Management API guide: docs/api-management.md
 - Next.js admin guide: docs/nextjs-report-admin-guide.md
+- Next.js Steps blueprint: docs/nextjs-report-editor-steps-blueprint.md
 
 ## 5. Quick Flow (With Sample Excel)
 

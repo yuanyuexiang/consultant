@@ -263,3 +263,9 @@ pnpm dev
 4. 发布后 published_version 可见增长。
 5. 详情页可渲染 sections 与 chart 基础信息。
 6. section 页面能查看指定 section payload。
+
+## 14. Steps 向导蓝图
+
+如果 report 编辑复杂度较高，建议优先使用 Antd Steps 方案，详见：
+
+- docs/nextjs-report-editor-steps-blueprint.md
