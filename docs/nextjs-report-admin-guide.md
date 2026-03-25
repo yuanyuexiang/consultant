@@ -10,9 +10,8 @@
 - 管理动作：
   1. 上传 Excel
   2. 触发组装
-  3. 触发发布
-  4. 查看 report 列表与详情
-  5. 查看 section 级内容
+  3. 查看 report 列表与详情
+  4. 查看 section 级内容
   6. report 级增删改查（Create/Update/Delete/Get）
 
 ## 2. 建议技术栈
@@ -100,7 +99,6 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 
 - 查看详情
 - 组装（Assemble）
-- 发布（Publish）
 
 调用接口：
 
@@ -132,9 +130,9 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 展示模块：
 
 1. 报告基础信息（id/name/type/status）
-2. sections 列表
-3. 每个 section 的 chart 数量
-4. 操作区：Assemble、Publish
+2. chapters 列表
+3. 每个 chapter 下 sections 与 chart 数量
+4. 操作区：Assemble、Save
 
 ### 6.4 Section 详情页 `/reports/[reportKey]/sections/[sectionKey]`
 
@@ -162,6 +160,7 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 1. 新增和修改成功后刷新列表缓存。
 2. 删除前弹二次确认，并提示不可恢复风险。
 3. 删除成功后主动跳转回列表页。
+4. 编辑请求优先使用 `chapters` 作为结构输入，`sections` 仅用于兼容旧数据迁移。
 
 ### 7.1 组装动作
 
@@ -174,16 +173,14 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 1. 组装完成后自动刷新列表和详情。
 2. 保留最近一次组装结果（页面内状态）。
 
-### 7.2 发布动作
+### 7.2 保存动作
 
-- 接口：`POST /v1/reports/{report_key}/publish`
-- 入参：`{ snapshot_id, comment }`
+- 接口：`PATCH /v1/reports/{report_key}`
 
 建议：
 
-1. 发布必须依赖最近一次组装产生的 `snapshot_id`。
-2. 发布前二次确认（Modal）。
-3. 发布成功后刷新 `published_version`。
+1. 保存后立即生效（无草稿/发布二态）。
+2. 保存成功后刷新列表与详情。
 
 ## 8. TypeScript 类型建议
 
@@ -242,8 +239,7 @@ export async function assembleReport(report_key: string) {
 1. 跑通 `GET /v1/reports`（确认 API 连通）
 2. 跑通上传
 3. 跑通组装
-4. 跑通发布
-5. 跑通详情与 section
+4. 跑通详情与 section
 
 ## 12. 本地调试脚本（示例）
 
@@ -260,8 +256,8 @@ pnpm dev
 1. 列表页可见所有 report。
 2. 上传 Excel 后有成功提示与解析统计。
 3. 组装后拿到 snapshot_id。
-4. 发布后 published_version 可见增长。
-5. 详情页可渲染 sections 与 chart 基础信息。
+4. 组装后报告详情可直接读取最新结果。
+5. 详情页可渲染 chapters/sections 与 chart 基础信息。
 6. section 页面能查看指定 section payload。
 
 ## 14. Steps 向导蓝图

@@ -39,10 +39,8 @@ curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/assemble" \
 	-H "Content-Type: application/json" \
 	-d '{"report_key":"data-analytics"}'
 
-# 3) publish snapshot
-curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics/publish" \
-	-H "Content-Type: application/json" \
-	-d '{"snapshot_id":10001,"comment":"first publish"}'
+# 3) read current report (assemble/save takes effect immediately)
+curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics"
 ```
 
 ## 6. Test

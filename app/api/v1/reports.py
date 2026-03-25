@@ -11,8 +11,6 @@ from app.schemas.report import (
     AssembleData,
     AssembleRequest,
     DeleteReportData,
-    PublishData,
-    PublishRequest,
     ReportCreateRequest,
     ReportListData,
     ReportListItem,
@@ -32,6 +30,40 @@ router = APIRouter(prefix="/v1/reports", tags=["reports"])
 repo = StorageRepository()
 
 
+def _flatten_chapter_sections(chapters: list[dict]) -> list[dict]:
+    sections: list[dict] = []
+    for chapter in chapters:
+        chapter_key = chapter.get("chapter_key")
+        for sec in chapter.get("sections", []):
+            if chapter_key and not sec.get("chapter_key"):
+                sec["chapter_key"] = chapter_key
+            sections.append(sec)
+    return sections
+
+
+def _build_chapters_from_sections(sections: list[dict]) -> list[dict]:
+    by_key: dict[str, list[dict]] = {}
+    for sec in sections:
+        chapter_key = sec.get("chapter_key") or "chapter_1"
+        sec_copy = dict(sec)
+        sec_copy["chapter_key"] = chapter_key
+        by_key.setdefault(chapter_key, []).append(sec_copy)
+
+    chapters: list[dict] = []
+    for idx, (chapter_key, secs) in enumerate(by_key.items(), start=1):
+        chapters.append(
+            {
+                "chapter_key": chapter_key,
+                "title": chapter_key,
+                "subtitle": None,
+                "order": idx,
+                "status": "draft",
+                "sections": secs,
+            }
+        )
+    return chapters
+
+
 def _error(status_code: int, code: int, field: str, detail: str) -> HTTPException:
     payload = ApiResponse(
         code=code,
@@ -46,32 +78,34 @@ def create_report(req: ReportCreateRequest):
     if repo.exists_report(req.report_key):
         raise _error(409, 1003, "report_key", f"report already exists: {req.report_key}")
 
+    chapters = req.chapters
+    if not chapters:
+        chapters = _build_chapters_from_sections(req.sections)
+
     payload = {
         "id": req.id or f"rpt_{req.report_key.replace('-', '_')}",
         "report_key": req.report_key,
         "name": req.name,
         "type": req.type,
         "status": req.status,
-        "published_version": 0,
-        "sections": req.sections,
+        "chapters": chapters,
     }
 
-    snapshot_id = repo.next_snapshot_id()
     digest = payload_hash(payload)
-    repo.save_snapshot(req.report_key, snapshot_id, digest, payload, "manual-create")
+    saved_at = repo.save_report(req.report_key, payload, digest)
     repo.upsert_report_index(
         req.report_key,
-        snapshot_id,
         payload,
         status=req.status,
-        published_version=0,
+        payload_hash=digest,
+        saved_at=saved_at,
     )
 
     return ApiResponse(
         data=ReportMutationData(
             report_key=req.report_key,
-            snapshot_id=snapshot_id,
             payload_hash=digest,
+            saved_at=saved_at,
         )
     )
 
@@ -80,37 +114,39 @@ def create_report(req: ReportCreateRequest):
 def update_report(report_key: str, req: ReportUpdateRequest):
     try:
         info = repo.get_report_info(report_key)
-        current_snapshot_id = int(info["snapshot_id"])
-        snap = repo.load_snapshot(report_key, current_snapshot_id)
+        report_doc = repo.load_report(report_key)
     except FileNotFoundError as exc:
         raise _error(404, 1004, "report_key", str(exc)) from exc
 
-    payload = snap["payload"]
+    payload = report_doc["payload"]
     if req.name is not None:
         payload["name"] = req.name
     if req.type is not None:
         payload["type"] = req.type
     if req.status is not None:
         payload["status"] = req.status
+    if req.chapters is not None:
+        payload["chapters"] = req.chapters
     if req.sections is not None:
-        payload["sections"] = req.sections
+        payload["chapters"] = _build_chapters_from_sections(req.sections)
 
-    snapshot_id = repo.next_snapshot_id()
+    payload.pop("sections", None)
+
     digest = payload_hash(payload)
-    repo.save_snapshot(report_key, snapshot_id, digest, payload, "manual-update")
+    saved_at = repo.save_report(report_key, payload, digest)
     repo.upsert_report_index(
         report_key,
-        snapshot_id,
         payload,
-        status=payload.get("status", info.get("status", "draft")),
-        published_version=int(info.get("published_version", 0)),
+        status=payload.get("status", info.get("status", "active")),
+        payload_hash=digest,
+        saved_at=saved_at,
     )
 
     return ApiResponse(
         data=ReportMutationData(
             report_key=report_key,
-            snapshot_id=snapshot_id,
             payload_hash=digest,
+            saved_at=saved_at,
         )
     )
 
@@ -169,33 +205,17 @@ def assemble_report_api(req: AssembleRequest):
     except ValueError as exc:
         raise _error(422, 1002, "payload", str(exc)) from exc
 
-    snapshot_id = repo.next_snapshot_id()
     digest = payload_hash(payload)
-    repo.save_snapshot(
+    saved_at = repo.save_report(req.report_key, payload, digest)
+    repo.upsert_report_index(
         req.report_key,
-        snapshot_id,
-        digest,
         payload,
-        parsed_record.get("source_file", "unknown.xlsx"),
+        status=payload.get("status", "active"),
+        payload_hash=digest,
+        saved_at=saved_at,
     )
 
-    data = AssembleData(report_key=req.report_key, snapshot_id=snapshot_id, payload_hash=digest)
-    return ApiResponse(data=data)
-
-
-@router.post("/{report_key}/publish", response_model=ApiResponse[PublishData])
-def publish_report(report_key: str, req: PublishRequest):
-    try:
-        snap = repo.load_snapshot(report_key, req.snapshot_id)
-    except FileNotFoundError as exc:
-        raise _error(404, 1004, "snapshot_id", str(exc)) from exc
-
-    version = repo.update_publish(report_key, req.snapshot_id, snap["payload"])
-    data = PublishData(
-        report_key=report_key,
-        published_version=version,
-        snapshot_id=req.snapshot_id,
-    )
+    data = AssembleData(report_key=req.report_key, payload_hash=digest)
     return ApiResponse(data=data)
 
 
@@ -208,24 +228,27 @@ def list_reports():
 @router.get("/{report_key}", response_model=ApiResponse[ReportPayloadData])
 def get_report(report_key: str):
     try:
-        snapshot_id = repo.get_published_snapshot_id(report_key)
-        snap = repo.load_snapshot(report_key, snapshot_id)
+        report_doc = repo.load_report(report_key)
     except FileNotFoundError as exc:
         raise _error(404, 1004, "report_key", str(exc)) from exc
-    return ApiResponse(data=ReportPayloadData(payload=snap["payload"]))
+    return ApiResponse(data=ReportPayloadData(payload=report_doc["payload"]))
 
 
 @router.get("/{report_key}/sections/{section_key}", response_model=ApiResponse[SectionPayloadData])
 def get_section(report_key: str, section_key: str):
     try:
-        snapshot_id = repo.get_published_snapshot_id(report_key)
-        snap = repo.load_snapshot(report_key, snapshot_id)
+        report_doc = repo.load_report(report_key)
     except FileNotFoundError as exc:
         raise _error(404, 1004, "report_key", str(exc)) from exc
 
-    sections = snap["payload"].get("sections", [])
+    sections = report_doc["payload"].get("sections", [])
     for sec in sections:
         if sec.get("section_key") == section_key:
             return ApiResponse(data=SectionPayloadData(section_key=section_key, section=sec))
+
+    for chapter in report_doc["payload"].get("chapters", []):
+        for sec in chapter.get("sections", []):
+            if sec.get("section_key") == section_key:
+                return ApiResponse(data=SectionPayloadData(section_key=section_key, section=sec))
 
     raise _error(404, 1004, "section_key", f"section not found: {section_key}")

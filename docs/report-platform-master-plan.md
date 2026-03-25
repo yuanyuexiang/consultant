@@ -4,7 +4,7 @@
 
 构建一个由 Excel 文件驱动的可配置报告平台，实现：
 
-1. report 结构化配置（report/section/chart）
+1. report 结构化配置（report/chapter/section/chart）
 2. 通过 Excel 上传解析 dataset 数据
 3. 自动填充 ECharts option 并生成报告 JSON
 4. 前端只读已发布快照 JSON
@@ -14,7 +14,7 @@
 第一版按最简路径落地：
 
 1. 上传标准化 Excel 文件。
-2. 后端解析 Excel，提取 report/section/chart 属性与 dataset 数据。
+2. 后端解析 Excel，提取 report/chapter/section/chart 属性与 dataset 数据。
 3. 后端按规则组装生成最终报告 JSON。
 4. 前端读取最新发布的报告快照。
 
@@ -24,7 +24,9 @@
 
 ## 2.0 业务语义约定（后端实现口径）
 
-一个报告（report）由多个段落（section）组成。
+一个报告（report）由多个章节（chapter）组成。
+
+每个章节（chapter）由多个段落（section）组成。
 
 每个段落（section）由以下部分组成：
 
@@ -48,10 +50,11 @@
 
 建议输出契约：
 
-1. report -> sections[]
-2. section -> title, subtitle, content_items
-3. content_items -> charts[]
-4. chart -> chart_id, chart_type, title, subtitle, echarts, table_data/meta
+1. report -> chapters[]
+2. chapter -> chapter_key, title, subtitle, sections[]
+3. section -> title, subtitle, content_items
+4. content_items -> charts[]
+5. chart -> chart_id, chart_type, title, subtitle, echarts, table_data/meta
 
 ## 2.1 report
 
@@ -414,13 +417,25 @@ M2（下周）：
 | generated_at | string | 否 | 生成时间，ISO8601 |
 | source_file | string | 否 | 来源 Excel 文件名 |
 | payload_hash | string | 否 | 报告内容哈希 |
-| sections | array | 是 | 段落列表 |
+| chapters | array | 是 | 章节列表 |
 
-### 12.2 section 字段
+### 12.2 chapter 字段
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| chapter_key | string | 是 | 章节业务键 |
+| title | string | 是 | 章节标题 |
+| subtitle | string/null | 否 | 章节子标题 |
+| order | number | 是 | 章节顺序 |
+| status | string | 否 | 章节状态 |
+| sections | array | 是 | 章节下段落列表 |
+
+### 12.3 section 字段
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | id | string | 否 | section 唯一标识 |
+| chapter_key | string | 否 | 所属章节键 |
 | section_key | string | 是 | 段落业务键 |
 | title | string | 是 | 段落标题 |
 | subtitle | string/null | 否 | 段落子标题 |
@@ -430,7 +445,7 @@ M2（下周）：
 | content | string/null | 否 | 内容模板，例如 {{chart:orig_1}} |
 | content_items | object | 是 | 内容对象 |
 
-### 12.3 chart 字段
+### 12.4 chart 字段
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -442,20 +457,20 @@ M2（下周）：
 | table_data | object/null | 条件必填 | table 图必填，line 图可为 null |
 | meta | object | 是 | 元信息（formatter、metric_name 等） |
 
-### 12.4 line 图约定
+### 12.5 line 图约定
 
 1. `chart_type = line`
 2. `echarts.xAxis.data` 必须存在且有序
 3. `echarts.series[].data.length` 必须与 `xAxis.data.length` 一致
 4. 缺失点使用 `null`，禁止补 `0`
 
-### 12.5 table 图约定
+### 12.6 table 图约定
 
 1. `chart_type = table`
 2. `table_data.columns` 必须包含 key/title/align
 3. `table_data.rows` 为对象数组，键名与 columns.key 一致
 
-### 12.6 最小示例
+### 12.7 最小示例
 
 ```json
 {
@@ -465,33 +480,41 @@ M2（下周）：
   "type": "analytics",
   "status": "published",
   "published_version": 1,
-  "sections": [
+  "chapters": [
     {
-      "section_key": "origination_trends",
-      "title": "Origination Trends",
+      "chapter_key": "chapter_1",
+      "title": "Origination",
       "subtitle": null,
       "order": 1,
-      "content_items": {
-        "charts": [
-          {
-            "chart_id": "orig_1",
-            "chart_type": "line",
-            "title": "Total Origination Balance",
-            "subtitle": null,
-            "echarts": {
-              "xAxis": { "type": "category", "data": ["2016-06", "2016-12"] },
-              "yAxis": { "type": "value", "name": "Origination Balance (k)" },
-              "series": [
-                { "name": "Platform", "type": "line", "data": [41366576.93, 80030708.74] }
-              ]
-            },
-            "table_data": null,
-            "meta": { "formatter": "thousands", "metric_name": "Orig_Bal", "display_precision": 3 }
+      "sections": [
+        {
+          "section_key": "origination_trends",
+          "title": "Origination Trends",
+          "subtitle": null,
+          "order": 1,
+          "content_items": {
+            "charts": [
+              {
+                "chart_id": "orig_1",
+                "chart_type": "line",
+                "title": "Total Origination Balance",
+                "subtitle": null,
+                "echarts": {
+                  "xAxis": { "type": "category", "data": ["2016-06", "2016-12"] },
+                  "yAxis": { "type": "value", "name": "Origination Balance (k)" },
+                  "series": [
+                    { "name": "Platform", "type": "line", "data": [41366576.93, 80030708.74] }
+                  ]
+                },
+                "table_data": null,
+                "meta": { "formatter": "thousands", "metric_name": "Orig_Bal", "display_precision": 3 }
+              }
+            ],
+            "kind": null,
+            "items": null
           }
-        ],
-        "kind": null,
-        "items": null
-      }
+        }
+      ]
     }
   ]
 }

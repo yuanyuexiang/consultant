@@ -1,12 +1,12 @@
 # Next.js 管理端 Report 编辑器（Antd Steps）实施蓝图
 
-本蓝图基于当前后端能力与管理端目标，给出一套可直接落地的 Steps 向导式编辑方案。
+本蓝图基于当前后端能力与管理端目标，给出一套可直接落地的 Steps 向导式编辑方案（当前无草稿/发布二态）。
 
 ## 1. 设计目标
 
 - 将复杂 report 编辑拆成线性步骤，降低一次性认知负担。
 - 每步可单独校验、保存草稿、回退修改。
-- 发布动作强门禁：必须先组装成功。
+- 保存即生效，无单独发布步骤。
 - 兼容现有 API（包含 report CRUD 与上传/组装/发布）。
 
 ## 2. 页面路由建议
@@ -17,7 +17,7 @@
 
 推荐把 Steps 放在新建页和编辑页共用组件中。
 
-## 3. Steps 分解（5 步）
+## 3. Steps 分解（4 步）
 
 ### Step 1: 基础信息
 
@@ -104,25 +104,17 @@
 
 - 未组装成功，禁止进入发布步骤
 
-### Step 5: 发布确认
+### Step 4: 保存确认
 
-目标：显示发布关键信息并完成发布。
-
-展示：
-
-- report_key
-- snapshot_id
-- payload_hash
-- 变更摘要（可选）
+目标：确认当前编辑与组装结果并保存。
 
 后端映射：
 
-- POST /consultant/api/v1/reports/{report_key}/publish
+- PATCH /consultant/api/v1/reports/{report_key}
 
 门禁：
 
-- 必须有最新 snapshot_id
-- 二次确认弹窗
+- 推荐先完成组装预览再保存
 
 ## 4. 前端状态模型（建议）
 
@@ -130,7 +122,7 @@
 
 - draftPayload: 当前编辑中的 report
 - savedSnapshotId: 最近一次保存产生的快照（可选）
-- assembledSnapshotId: 最近一次组装成功的 snapshot_id
+- assembledSnapshotId: 最近一次组装请求完成标记（可选）
 - publishReady: 是否满足发布条件
 
 建议状态来源：
@@ -161,7 +153,7 @@
 - 每步都提供 Save Draft 按钮。
 - 切换步骤前自动校验并提示未保存内容。
 - 组装成功后自动刷新预览。
-- 发布成功后跳转到 report 详情页。
+- 保存成功后跳转到 report 详情页。
 
 ## 7. API 调用顺序（编辑场景）
 
@@ -169,7 +161,6 @@
 - 多次编辑：PATCH /reports/{report_key}
 - 组装：POST /reports/assemble
 - 预览：GET /reports/{report_key}
-- 发布：POST /reports/{report_key}/publish
 
 注意：所有实际路径都要带 /consultant/api 前缀。
 
@@ -187,8 +178,7 @@ export type StepKey =
   | "basic"
   | "sections"
   | "charts"
-  | "assemble"
-  | "publish";
+  | "assemble";
 
 export type EditorState = {
   currentStep: StepKey;
@@ -205,7 +195,7 @@ export type EditorState = {
 第 1 期（最快上线）：
 
 - 完成 5 步流程
-- 完成 report 级 CRUD + assemble + publish
+- 完成 report 级 CRUD + assemble + save
 - 完成基础错误提示
 
 第 2 期（体验优化）：

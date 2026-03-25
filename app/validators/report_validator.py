@@ -7,8 +7,19 @@ def _raise(msg: str) -> None:
     raise ValueError(msg)
 
 
+def _extract_sections(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    sections = payload.get("sections")
+    if sections:
+        return sections
+
+    collected: list[dict[str, Any]] = []
+    for chapter in payload.get("chapters", []):
+        collected.extend(chapter.get("sections", []))
+    return collected
+
+
 def validate_report_payload(payload: dict[str, Any]) -> None:
-    sections = payload.get("sections", [])
+    sections = _extract_sections(payload)
 
     # Rule 1: section order unique inside one report.
     orders = [sec.get("order") for sec in sections]

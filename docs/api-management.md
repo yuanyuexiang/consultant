@@ -78,44 +78,7 @@ Success response example:
   "message": "ok",
   "data": {
     "report_key": "data-analytics",
-    "snapshot_id": 10001,
     "payload_hash": "sha256:..."
-  },
-  "error": null
-}
-```
-
-## 4. Publish Report
-
-- Endpoint: `POST /v1/reports/{report_key}/publish`
-- Path param: `report_key`
-- Body:
-
-```json
-{
-  "snapshot_id": 10001,
-  "comment": "first publish"
-}
-```
-
-Command:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics/publish" \
-  -H "Content-Type: application/json" \
-  -d '{"snapshot_id":10001,"comment":"first publish"}'
-```
-
-Success response example:
-
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "report_key": "data-analytics",
-    "published_version": 1,
-    "snapshot_id": 10001
   },
   "error": null
 }
@@ -161,7 +124,16 @@ curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports" \
     "name": "CRUD Demo",
     "type": "analytics",
     "status": "draft",
-    "sections": []
+    "chapters": [
+      {
+        "chapter_key": "chapter_1",
+        "title": "Overview",
+        "subtitle": null,
+        "order": 1,
+        "status": "draft",
+        "sections": []
+      }
+    ]
   }'
 ```
 
@@ -174,7 +146,17 @@ curl -X PATCH "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "CRUD Demo Updated",
-    "status": "published"
+    "status": "published",
+    "chapters": [
+      {
+        "chapter_key": "chapter_1",
+        "title": "Overview Updated",
+        "subtitle": null,
+        "order": 1,
+        "status": "published",
+        "sections": []
+      }
+    ]
   }'
 ```
 
@@ -190,8 +172,7 @@ curl -X DELETE "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo"
 
 1. Upload Excel
 2. Assemble report
-3. Publish snapshot
-4. Query report/section for frontend rendering
+3. Query report/section for frontend rendering
 
 ## 8. Common Error Cases
 
@@ -229,19 +210,6 @@ curl -X DELETE "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo"
 }
 ```
 
-### 8.3 Snapshot Not Found
+### 8.3 Report Not Found
 
-- Condition: publish with wrong `snapshot_id`
-- Example:
-
-```json
-{
-  "code": 1004,
-  "message": "invalid request",
-  "data": null,
-  "error": {
-    "field": "snapshot_id",
-    "detail": "snapshot not found: data-analytics/10001"
-  }
-}
-```
+- Condition: query/update/delete with wrong `report_key`

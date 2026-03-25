@@ -16,19 +16,7 @@ class AssembleRequest(BaseModel):
 
 class AssembleData(BaseModel):
     report_key: str
-    snapshot_id: int
     payload_hash: str
-
-
-class PublishRequest(BaseModel):
-    snapshot_id: int
-    comment: str | None = None
-
-
-class PublishData(BaseModel):
-    report_key: str
-    published_version: int
-    snapshot_id: int
 
 
 class ReportListItem(BaseModel):
@@ -37,7 +25,6 @@ class ReportListItem(BaseModel):
     name: str
     type: str
     status: str
-    published_version: int = 0
 
 
 class ReportListData(BaseModel):
@@ -58,7 +45,8 @@ class ReportCreateRequest(BaseModel):
     id: str | None = None
     name: str
     type: str = "analytics"
-    status: str = "draft"
+    status: str = "active"
+    chapters: list[dict[str, Any]] = Field(default_factory=list)
     sections: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -66,13 +54,14 @@ class ReportUpdateRequest(BaseModel):
     name: str | None = None
     type: str | None = None
     status: str | None = None
+    chapters: list[dict[str, Any]] | None = None
     sections: list[dict[str, Any]] | None = None
 
 
 class ReportMutationData(BaseModel):
     report_key: str
-    snapshot_id: int
     payload_hash: str
+    saved_at: str
 
 
 class DeleteReportData(BaseModel):

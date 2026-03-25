@@ -28,6 +28,7 @@ def test_report_crud(tmp_path):
     settings.runtime_dir = runtime_dir
     settings.upload_dir = runtime_dir / "uploads"
     settings.parse_dir = runtime_dir / "parsed"
+    settings.reports_dir = runtime_dir / "reports"
     settings.snapshot_dir = runtime_dir / "snapshots"
     settings.meta_file = runtime_dir / "reports_index.json"
     settings.ensure_dirs()
@@ -36,7 +37,7 @@ def test_report_crud(tmp_path):
         "report_key": "crud-demo",
         "name": "CRUD Demo",
         "type": "analytics",
-        "status": "draft",
+        "status": "active",
         "sections": [],
     }
     create_resp = client.post("/consultant/api/v1/reports", json=create_payload)
@@ -44,10 +45,11 @@ def test_report_crud(tmp_path):
     create_body = create_resp.json()
     assert create_body["code"] == 0
     assert create_body["data"]["report_key"] == "crud-demo"
+    assert create_body["data"]["saved_at"]
 
     update_resp = client.patch(
         "/consultant/api/v1/reports/crud-demo",
-        json={"name": "CRUD Demo Updated", "status": "published"},
+        json={"name": "CRUD Demo Updated", "status": "active"},
     )
     assert update_resp.status_code == 200
     update_body = update_resp.json()

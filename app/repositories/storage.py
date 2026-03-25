@@ -1,5 +1,4 @@
 import json
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -51,80 +50,42 @@ class StorageRepository:
             raise FileNotFoundError(f"parsed data not found for {report_key}")
         return data
 
-    def next_snapshot_id(self) -> int:
-        index = self._load_index()
-        index["sequence"] += 1
-        self._save_index(index)
-        return index["sequence"]
-
-    def save_snapshot(
-        self,
-        report_key: str,
-        snapshot_id: int,
-        payload_hash: str,
-        payload_json: dict[str, Any],
-        source_file: str,
-    ) -> None:
-        snap = {
-            "snapshot_id": snapshot_id,
+    def save_report(self, report_key: str, payload: dict[str, Any], payload_hash: str) -> str:
+        saved_at = datetime.now(UTC).isoformat()
+        report_doc = {
             "report_key": report_key,
+            "saved_at": saved_at,
             "payload_hash": payload_hash,
-            "source_file": source_file,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "payload": payload_json,
+            "payload": payload,
         }
-        path = settings.snapshot_dir / report_key / f"{snapshot_id}.json"
-        _write_json(path, snap)
+        path = settings.reports_dir / f"{report_key}.json"
+        _write_json(path, report_doc)
+        return saved_at
 
-    def load_snapshot(self, report_key: str, snapshot_id: int) -> dict[str, Any]:
-        path = settings.snapshot_dir / report_key / f"{snapshot_id}.json"
+    def load_report(self, report_key: str) -> dict[str, Any]:
+        path = settings.reports_dir / f"{report_key}.json"
         data = _read_json(path, None)
         if data is None:
-            raise FileNotFoundError(f"snapshot not found: {report_key}/{snapshot_id}")
+            raise FileNotFoundError(f"report not found: {report_key}")
         return data
-
-    def update_publish(
-        self,
-        report_key: str,
-        snapshot_id: int,
-        payload: dict[str, Any],
-    ) -> int:
-        index = self._load_index()
-        reports = index.setdefault("reports", {})
-        info = reports.setdefault(report_key, {"published_version": 0})
-        info["published_version"] = int(info.get("published_version", 0)) + 1
-        info["snapshot_id"] = snapshot_id
-        info["updated_at"] = datetime.now(UTC).isoformat()
-        info["name"] = payload.get("name", report_key)
-        info["id"] = payload.get("id", report_key)
-        info["type"] = payload.get("type", "analytics")
-        info["status"] = "published"
-        self._save_index(index)
-        return info["published_version"]
 
     def upsert_report_index(
         self,
         report_key: str,
-        snapshot_id: int,
         payload: dict[str, Any],
         status: str,
-        published_version: int | None = None,
+        payload_hash: str,
+        saved_at: str,
     ) -> None:
         index = self._load_index()
         reports = index.setdefault("reports", {})
-        existing = reports.get(report_key, {})
         reports[report_key] = {
-            "published_version": (
-                published_version
-                if published_version is not None
-                else int(existing.get("published_version", 0))
-            ),
-            "snapshot_id": snapshot_id,
-            "updated_at": datetime.now(UTC).isoformat(),
+            "updated_at": saved_at,
             "name": payload.get("name", report_key),
             "id": payload.get("id", report_key),
             "type": payload.get("type", "analytics"),
             "status": status,
+            "payload_hash": payload_hash,
         }
         self._save_index(index)
 
@@ -138,19 +99,10 @@ class StorageRepository:
                     "id": info.get("id", report_key),
                     "name": info.get("name", report_key),
                     "type": info.get("type", "analytics"),
-                    "status": info.get("status", "draft"),
-                    "published_version": int(info.get("published_version", 0)),
-                    "snapshot_id": info.get("snapshot_id"),
+                    "status": info.get("status", "active"),
                 }
             )
         return sorted(items, key=lambda x: x["report_key"])
-
-    def get_published_snapshot_id(self, report_key: str) -> int:
-        index = self._load_index()
-        info = index.get("reports", {}).get(report_key)
-        if not info or "snapshot_id" not in info:
-            raise FileNotFoundError(f"published report not found: {report_key}")
-        return int(info["snapshot_id"])
 
     def exists_report(self, report_key: str) -> bool:
         index = self._load_index()
@@ -171,9 +123,9 @@ class StorageRepository:
         del reports[report_key]
         self._save_index(index)
 
-        snap_dir = settings.snapshot_dir / report_key
-        if snap_dir.exists():
-            shutil.rmtree(snap_dir)
+        report_file = settings.reports_dir / f"{report_key}.json"
+        if report_file.exists():
+            report_file.unlink()
 
         parsed_file = settings.parse_dir / f"{report_key}.json"
         if parsed_file.exists():
