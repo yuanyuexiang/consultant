@@ -51,42 +51,9 @@ Success response example:
 }
 ```
 
-## 3. Assemble Report
+## 3. Query APIs
 
-- Endpoint: `POST /v1/reports/assemble`
-- Body:
-
-```json
-{
-  "report_key": "data-analytics"
-}
-```
-
-Command:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/assemble" \
-  -H "Content-Type: application/json" \
-  -d '{"report_key":"data-analytics"}'
-```
-
-Success response example:
-
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "report_key": "data-analytics",
-    "payload_hash": "sha256:..."
-  },
-  "error": null
-}
-```
-
-## 5. Query APIs
-
-### 5.1 List Reports
+### 3.1 List Reports
 
 - Endpoint: `GET /v1/reports`
 
@@ -94,7 +61,7 @@ Success response example:
 curl "http://127.0.0.1:8000/consultant/api/v1/reports"
 ```
 
-### 5.2 Get Published Report Payload
+### 3.2 Get Report Payload
 
 - Endpoint: `GET /v1/reports/{report_key}`
 
@@ -102,7 +69,7 @@ curl "http://127.0.0.1:8000/consultant/api/v1/reports"
 curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics"
 ```
 
-### 5.3 Get One Section
+### 3.3 Get One Section
 
 - Endpoint: `GET /v1/reports/{report_key}/sections/{section_key}`
 
@@ -110,9 +77,9 @@ curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics"
 curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics/sections/origination_trends"
 ```
 
-## 6. Report CRUD APIs
+## 4. Report CRUD APIs
 
-### 6.1 Create Report
+### 4.1 Create Report
 
 - Endpoint: `POST /v1/reports`
 
@@ -123,7 +90,7 @@ curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports" \
     "report_key": "crud-demo",
     "name": "CRUD Demo",
     "type": "analytics",
-    "status": "draft",
+    "status": "active",
     "chapters": [
       {
         "chapter_key": "chapter_1",
@@ -137,7 +104,7 @@ curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports" \
   }'
 ```
 
-### 6.2 Update Report
+### 4.2 Update Report
 
 - Endpoint: `PATCH /v1/reports/{report_key}`
 
@@ -146,21 +113,26 @@ curl -X PATCH "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "CRUD Demo Updated",
-    "status": "published",
+    "status": "active",
     "chapters": [
       {
         "chapter_key": "chapter_1",
         "title": "Overview Updated",
         "subtitle": null,
         "order": 1,
-        "status": "published",
+        "status": "active",
         "sections": []
       }
     ]
   }'
 ```
 
-### 6.3 Delete Report
+Section 描述文本约定：
+
+- 每个 section 使用 `content` 字段存放描述性文字（后端会保证该字段存在）。
+- `content_items` 用于结构化内容（charts、text blocks）。
+
+### 4.3 Delete Report
 
 - Endpoint: `DELETE /v1/reports/{report_key}`
 
@@ -168,15 +140,15 @@ curl -X PATCH "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo" \
 curl -X DELETE "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo"
 ```
 
-## 7. Recommended Call Sequence
+## 5. Recommended Call Sequence
 
 1. Upload Excel
-2. Assemble report
+2. Save report (create/update)
 3. Query report/section for frontend rendering
 
-## 8. Common Error Cases
+## 6. Common Error Cases
 
-### 8.1 Wrong File Type
+### 6.1 Wrong File Type
 
 - Condition: upload non-`.xlsx`
 - Example:
@@ -193,9 +165,9 @@ curl -X DELETE "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo"
 }
 ```
 
-### 8.2 Parsed Data Missing
+### 6.2 Parsed Data Missing
 
-- Condition: call assemble before upload
+- Condition: query section that does not exist
 - Example:
 
 ```json
@@ -204,12 +176,12 @@ curl -X DELETE "http://127.0.0.1:8000/consultant/api/v1/reports/crud-demo"
   "message": "invalid request",
   "data": null,
   "error": {
-    "field": "report_key",
-    "detail": "parsed data not found for data-analytics"
+    "field": "section_key",
+    "detail": "section not found: non-exist-section"
   }
 }
 ```
 
-### 8.3 Report Not Found
+### 6.3 Report Not Found
 
 - Condition: query/update/delete with wrong `report_key`

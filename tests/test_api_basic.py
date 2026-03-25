@@ -29,7 +29,6 @@ def test_report_crud(tmp_path):
     settings.upload_dir = runtime_dir / "uploads"
     settings.parse_dir = runtime_dir / "parsed"
     settings.reports_dir = runtime_dir / "reports"
-    settings.snapshot_dir = runtime_dir / "snapshots"
     settings.meta_file = runtime_dir / "reports_index.json"
     settings.ensure_dirs()
 

@@ -8,14 +8,12 @@ class Settings:
         self.upload_dir = self.runtime_dir / "uploads"
         self.parse_dir = self.runtime_dir / "parsed"
         self.reports_dir = self.runtime_dir / "reports"
-        self.snapshot_dir = self.runtime_dir / "snapshots"
         self.meta_file = self.runtime_dir / "reports_index.json"
 
     def ensure_dirs(self) -> None:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.parse_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
 
 

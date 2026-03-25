@@ -1,6 +1,6 @@
 # Report Platform Backend
 
-Python + FastAPI backend for Excel-driven BI report assembly.
+Python + FastAPI backend for Excel-driven BI report management.
 
 ## 1. Environment
 
@@ -34,12 +34,7 @@ curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/upload-excel" \
 	-F "file=@data/Slide 4 Origination Trends.xlsx" \
 	-F "report_key=data-analytics"
 
-# 2) assemble report
-curl -X POST "http://127.0.0.1:8000/consultant/api/v1/reports/assemble" \
-	-H "Content-Type: application/json" \
-	-d '{"report_key":"data-analytics"}'
-
-# 3) read current report (assemble/save takes effect immediately)
+# 2) read current report (save takes effect immediately)
 curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics"
 ```
 

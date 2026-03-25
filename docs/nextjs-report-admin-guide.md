@@ -1,6 +1,6 @@
 # Report 管理端开发指南（Next.js）
 
-本指南面向前端管理端开发，目标是基于现有后端 API，完成 report 的上传、组装、发布、查询全流程。
+本指南面向前端管理端开发，目标是基于现有后端 API，完成 report 的上传、编辑保存、查询全流程。
 
 ## 1. 目标与范围
 
@@ -9,7 +9,7 @@
 - 对接后端：`/consultant/api/v1/reports/*`
 - 管理动作：
   1. 上传 Excel
-  2. 触发组装
+  2. 保存 report 编辑
   3. 查看 report 列表与详情
   4. 查看 section 级内容
   6. report 级增删改查（Create/Update/Delete/Get）
@@ -45,7 +45,7 @@ src/
       report-list-table.tsx
       report-actions.tsx
       upload-form.tsx
-      publish-dialog.tsx
+      save-dialog.tsx
   lib/
     http.ts                       # axios/fetch 封装
     env.ts                        # 环境变量读取
@@ -93,12 +93,12 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 - name
 - type
 - status
-- published_version
+- updated_at
 
 操作按钮建议：
 
 - 查看详情
-- 组装（Assemble）
+- 保存（Save）
 
 调用接口：
 
@@ -132,7 +132,7 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 1. 报告基础信息（id/name/type/status）
 2. chapters 列表
 3. 每个 chapter 下 sections 与 chart 数量
-4. 操作区：Assemble、Save
+4. 操作区：Save
 
 ### 6.4 Section 详情页 `/reports/[reportKey]/sections/[sectionKey]`
 
@@ -162,25 +162,15 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 3. 删除成功后主动跳转回列表页。
 4. 编辑请求优先使用 `chapters` 作为结构输入，`sections` 仅用于兼容旧数据迁移。
 
-### 7.1 组装动作
-
-- 接口：`POST /v1/reports/assemble`
-- 入参：`{ report_key }`
-- 成功后缓存 `snapshot_id` 与 `payload_hash`
-
-建议：
-
-1. 组装完成后自动刷新列表和详情。
-2. 保留最近一次组装结果（页面内状态）。
-
-### 7.2 保存动作
+### 7.1 保存动作
 
 - 接口：`PATCH /v1/reports/{report_key}`
 
 建议：
 
-1. 保存后立即生效（无草稿/发布二态）。
-2. 保存成功后刷新列表与详情。
+1. 保存后立即生效（无双态流程）。
+2. section 描述文本写入 `content` 字段。
+3. 保存成功后刷新列表与详情。
 
 ## 8. TypeScript 类型建议
 
@@ -198,7 +188,7 @@ export type ReportListItem = {
   name: string;
   type: string;
   status: string;
-  published_version: number;
+  updated_at: string;
 };
 ```
 
@@ -217,8 +207,11 @@ export async function getReports() {
   return http.get<ApiResponse<{ items: ReportListItem[] }>>("/v1/reports");
 }
 
-export async function assembleReport(report_key: string) {
-  return http.post<ApiResponse<{ snapshot_id: number }>>("/v1/reports/assemble", { report_key });
+export async function updateReport(report_key: string, payload: Record<string, unknown>) {
+  return http.patch<ApiResponse<{ report_key: string; payload_hash: string; saved_at: string }>>(
+    `/v1/reports/${report_key}`,
+    payload,
+  );
 }
 ```
 
@@ -227,8 +220,8 @@ export async function assembleReport(report_key: string) {
 建议统一错误提示函数：
 
 1. 上传失败：展示模板错误详情。
-2. 组装失败：展示校验失败字段。
-3. 发布失败：提示 snapshot 不存在或 report_key 错误。
+2. 保存失败：展示校验失败字段。
+3. 查询失败：提示 report_key 或 section_key 错误。
 
 建议文案：
 
@@ -238,7 +231,7 @@ export async function assembleReport(report_key: string) {
 
 1. 跑通 `GET /v1/reports`（确认 API 连通）
 2. 跑通上传
-3. 跑通组装
+3. 跑通新增/修改保存
 4. 跑通详情与 section
 
 ## 12. 本地调试脚本（示例）
@@ -255,8 +248,8 @@ pnpm dev
 
 1. 列表页可见所有 report。
 2. 上传 Excel 后有成功提示与解析统计。
-3. 组装后拿到 snapshot_id。
-4. 组装后报告详情可直接读取最新结果。
+3. 保存后报告详情可直接读取最新结果。
+4. section 的 `content` 字段存在并可展示描述文字。
 5. 详情页可渲染 chapters/sections 与 chart 基础信息。
 6. section 页面能查看指定 section payload。
 

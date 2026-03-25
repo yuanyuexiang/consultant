@@ -10,15 +10,6 @@ class UploadExcelData(BaseModel):
     parsed_points: int
 
 
-class AssembleRequest(BaseModel):
-    report_key: str
-
-
-class AssembleData(BaseModel):
-    report_key: str
-    payload_hash: str
-
-
 class ReportListItem(BaseModel):
     report_key: str
     id: str

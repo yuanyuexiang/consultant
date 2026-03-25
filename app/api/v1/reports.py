@@ -8,8 +8,6 @@ from app.config import settings
 from app.repositories.storage import StorageRepository
 from app.schemas.common import ApiResponse, ErrorDetail
 from app.schemas.report import (
-    AssembleData,
-    AssembleRequest,
     DeleteReportData,
     ReportCreateRequest,
     ReportListData,
@@ -20,11 +18,8 @@ from app.schemas.report import (
     SectionPayloadData,
     UploadExcelData,
 )
-from app.services.assembly_service import assemble_report
-from app.services.normalize_service import normalize_points
+from app.services.hash_service import payload_hash
 from app.services.parse_service import parse_excel
-from app.services.publish_service import payload_hash
-from app.validators.report_validator import validate_report_payload
 
 router = APIRouter(prefix="/v1/reports", tags=["reports"])
 repo = StorageRepository()
@@ -64,6 +59,36 @@ def _build_chapters_from_sections(sections: list[dict]) -> list[dict]:
     return chapters
 
 
+def _normalize_chapters(chapters: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for chapter in chapters:
+        chapter_key = chapter.get("chapter_key") or "chapter_1"
+        chapter_sections = []
+        for sec in chapter.get("sections", []):
+            sec_copy = dict(sec)
+            sec_copy["chapter_key"] = sec_copy.get("chapter_key") or chapter_key
+            # Keep a dedicated narrative field for descriptive text.
+            sec_copy["content"] = sec_copy.get("content") or ""
+            sec_copy["content_items"] = sec_copy.get("content_items") or {
+                "charts": [],
+                "kind": None,
+                "items": None,
+            }
+            chapter_sections.append(sec_copy)
+
+        normalized.append(
+            {
+                "chapter_key": chapter_key,
+                "title": chapter.get("title") or chapter_key,
+                "subtitle": chapter.get("subtitle"),
+                "order": int(chapter.get("order", 1)),
+                "status": chapter.get("status", "active"),
+                "sections": chapter_sections,
+            }
+        )
+    return normalized
+
+
 def _error(status_code: int, code: int, field: str, detail: str) -> HTTPException:
     payload = ApiResponse(
         code=code,
@@ -81,6 +106,7 @@ def create_report(req: ReportCreateRequest):
     chapters = req.chapters
     if not chapters:
         chapters = _build_chapters_from_sections(req.sections)
+    chapters = _normalize_chapters(chapters)
 
     payload = {
         "id": req.id or f"rpt_{req.report_key.replace('-', '_')}",
@@ -126,9 +152,9 @@ def update_report(report_key: str, req: ReportUpdateRequest):
     if req.status is not None:
         payload["status"] = req.status
     if req.chapters is not None:
-        payload["chapters"] = req.chapters
+        payload["chapters"] = _normalize_chapters(req.chapters)
     if req.sections is not None:
-        payload["chapters"] = _build_chapters_from_sections(req.sections)
+        payload["chapters"] = _normalize_chapters(_build_chapters_from_sections(req.sections))
 
     payload.pop("sections", None)
 
@@ -186,36 +212,6 @@ async def upload_excel(file: UploadFile = File(...), report_key: str | None = Fo
         parsed_charts=len(parsed["charts"]),
         parsed_points=len(parsed["chart_points"]),
     )
-    return ApiResponse(data=data)
-
-
-@router.post("/assemble", response_model=ApiResponse[AssembleData])
-def assemble_report_api(req: AssembleRequest):
-    try:
-        parsed_record = repo.load_parsed(req.report_key)
-    except FileNotFoundError as exc:
-        raise _error(404, 1004, "report_key", str(exc)) from exc
-
-    parsed = parsed_record["payload"]
-    normalized = normalize_points(parsed)
-    payload = assemble_report(parsed, normalized)
-
-    try:
-        validate_report_payload(payload)
-    except ValueError as exc:
-        raise _error(422, 1002, "payload", str(exc)) from exc
-
-    digest = payload_hash(payload)
-    saved_at = repo.save_report(req.report_key, payload, digest)
-    repo.upsert_report_index(
-        req.report_key,
-        payload,
-        status=payload.get("status", "active"),
-        payload_hash=digest,
-        saved_at=saved_at,
-    )
-
-    data = AssembleData(report_key=req.report_key, payload_hash=digest)
     return ApiResponse(data=data)
 
 
