@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.config import settings
 from app.repositories.storage import StorageRepository
@@ -96,6 +98,236 @@ def _error(status_code: int, code: int, field: str, detail: str) -> HTTPExceptio
         error=ErrorDetail(field=field, detail=detail),
     ).model_dump()
     return HTTPException(status_code=status_code, detail=payload)
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = _text(value).replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _line_type(value: str) -> str | list[int]:
+    if value == "dashed":
+        return "dashed"
+    if value == "dotted":
+        return "dotted"
+    if value == "dashdot":
+        return [6, 3, 1, 3]
+    return "solid"
+
+
+def _symbol(value: str) -> str:
+    if value == "circle":
+        return "circle"
+    if value == "square":
+        return "rect"
+    if value == "diamond":
+        return "diamond"
+    if value == "triangle":
+        return "triangle"
+    return "none"
+
+
+def _series_type(value: str) -> str:
+    return "line" if "line" in value else "scatter"
+
+
+def _collect_category_x(rows: list[dict[str, Any]]) -> list[str | float]:
+    ordered: list[str | float] = []
+    seen: set[str] = set()
+
+    for row in rows:
+        raw = row.get("x")
+        if raw is None:
+            continue
+        as_num = _number(raw)
+        value: str | float = as_num if as_num is not None else _text(raw)
+        key = str(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(value)
+
+    if ordered and all(isinstance(item, (int, float)) for item in ordered):
+        return sorted(float(item) for item in ordered)
+
+    return ordered
+
+
+def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    x_axis = original.get("xAxis")
+    if isinstance(x_axis, list):
+        x_axis = x_axis[0] if x_axis else {}
+    if not isinstance(x_axis, dict):
+        x_axis = {}
+
+    is_time = x_axis.get("type") == "time"
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[_text(row.get("legend")) or "Series"].append(row)
+
+    x_values = [] if is_time else _collect_category_x(rows)
+    series: list[dict[str, Any]] = []
+
+    for legend, points in grouped.items():
+        style = points[0] if points else {}
+        if is_time:
+            data = [
+                [_text(item.get("x")), y]
+                for item in points
+                if (y := _number(item.get("y"))) is not None
+            ]
+        else:
+            point_map: dict[str, float] = {}
+            for item in points:
+                y = _number(item.get("y"))
+                x = _text(item.get("x"))
+                if y is None or not x:
+                    continue
+                point_map[x] = y
+            data = [point_map.get(str(x_value)) for x_value in x_values]
+
+        series.append(
+            {
+                "name": legend,
+                "type": _series_type(_text(style.get("type")) or "line"),
+                "data": data,
+                "connectNulls": True,
+                "showSymbol": "point" in (_text(style.get("type")) or "line"),
+                "symbol": _symbol(_text(style.get("shape")) or "none"),
+                "symbolSize": max(2, (_number(style.get("point_size")) or 0) / 2),
+                "lineStyle": {
+                    "type": _line_type(_text(style.get("line_style")) or "solid"),
+                    "width": max(1, (_number(style.get("line_width")) or 2) / 2),
+                },
+                "itemStyle": {
+                    "color": _text(style.get("color")) or "#5470C6",
+                },
+            }
+        )
+
+    return {
+        **original,
+        "xAxis": (
+            {
+                **x_axis,
+                "type": "time",
+            }
+            if is_time
+            else {
+                **x_axis,
+                "type": "category",
+                "data": x_values,
+            }
+        ),
+        "series": series,
+    }
+
+
+def _filter_source_rows(
+    rows: list[dict[str, Any]],
+    filter1: str,
+    filter2: str,
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        row_filter1 = _text(row.get("filter1")) or "All"
+        row_filter2 = _text(row.get("filter2")) or "All"
+        if filter1 != "All" and row_filter1 != filter1:
+            continue
+        if filter2 != "All" and row_filter2 != filter2:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _normalize_source_rows(chart: dict[str, Any]) -> list[dict[str, Any]]:
+    meta = chart.get("meta")
+    if not isinstance(meta, dict):
+        return []
+    source_rows = meta.get("source_rows")
+    if not isinstance(source_rows, list):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for item in source_rows:
+        if isinstance(item, dict):
+            rows.append(item)
+    return rows
+
+
+def _apply_chart_filters(chart: dict[str, Any], filter1: str, filter2: str) -> dict[str, Any]:
+    chart_copy = dict(chart)
+    rows = _normalize_source_rows(chart_copy)
+    if not rows:
+        return chart_copy
+
+    filtered_rows = _filter_source_rows(rows, filter1, filter2)
+
+    if chart_copy.get("chart_type") != "table":
+        option = chart_copy.get("echarts")
+        if isinstance(option, dict):
+            chart_copy["echarts"] = _build_filtered_option(option, filtered_rows)
+
+    meta = chart_copy.get("meta") if isinstance(chart_copy.get("meta"), dict) else {}
+    chart_copy["meta"] = {
+        **meta,
+        "selected_filters": {"filter1": filter1, "filter2": filter2},
+        "filtered_rows_count": len(filtered_rows),
+    }
+    return chart_copy
+
+
+def _apply_section_filters(section: dict[str, Any], filter1: str, filter2: str) -> dict[str, Any]:
+    section_copy = dict(section)
+    content_items = section_copy.get("content_items")
+    if not isinstance(content_items, dict):
+        return section_copy
+
+    charts = content_items.get("charts")
+    if not isinstance(charts, list):
+        return section_copy
+
+    filtered_charts = [
+        _apply_chart_filters(chart, filter1, filter2)
+        for chart in charts
+        if isinstance(chart, dict)
+    ]
+    section_copy["content_items"] = {**content_items, "charts": filtered_charts}
+    return section_copy
+
+
+def _find_section(payload: dict[str, Any], section_key: str) -> dict[str, Any] | None:
+    sections = payload.get("sections", [])
+    if isinstance(sections, list):
+        for sec in sections:
+            if isinstance(sec, dict) and sec.get("section_key") == section_key:
+                return sec
+
+    chapters = payload.get("chapters", [])
+    if isinstance(chapters, list):
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            for sec in chapter.get("sections", []):
+                if isinstance(sec, dict) and sec.get("section_key") == section_key:
+                    return sec
+    return None
 
 
 @router.post("", response_model=ApiResponse[ReportMutationData])
@@ -206,11 +438,26 @@ async def upload_excel(file: UploadFile = File(...), report_key: str | None = Fo
     key = str(meta["report_key"])
     repo.save_parsed(key, source_name, parsed)
 
+    assembled_payload = parsed.get("assembled_payload")
+    if isinstance(assembled_payload, dict):
+        digest = payload_hash(assembled_payload)
+        saved_at = repo.save_report(key, assembled_payload, digest)
+        repo.upsert_report_index(
+            key,
+            assembled_payload,
+            status=assembled_payload.get("status", "active"),
+            payload_hash=digest,
+            saved_at=saved_at,
+        )
+
+    parsed_charts = len(parsed.get("charts", []))
+    parsed_points = len(parsed.get("chart_points", []))
+
     data = UploadExcelData(
         report_key=key,
         source_file=source_name,
-        parsed_charts=len(parsed["charts"]),
-        parsed_points=len(parsed["chart_points"]),
+        parsed_charts=parsed_charts,
+        parsed_points=parsed_points,
     )
     return ApiResponse(data=data)
 
@@ -231,20 +478,20 @@ def get_report(report_key: str):
 
 
 @router.get("/{report_key}/sections/{section_key}", response_model=ApiResponse[SectionPayloadData])
-def get_section(report_key: str, section_key: str):
+def get_section(
+    report_key: str,
+    section_key: str,
+    filter1: str = Query(default="All"),
+    filter2: str = Query(default="All"),
+):
     try:
         report_doc = repo.load_report(report_key)
     except FileNotFoundError as exc:
         raise _error(404, 1004, "report_key", str(exc)) from exc
 
-    sections = report_doc["payload"].get("sections", [])
-    for sec in sections:
-        if sec.get("section_key") == section_key:
-            return ApiResponse(data=SectionPayloadData(section_key=section_key, section=sec))
-
-    for chapter in report_doc["payload"].get("chapters", []):
-        for sec in chapter.get("sections", []):
-            if sec.get("section_key") == section_key:
-                return ApiResponse(data=SectionPayloadData(section_key=section_key, section=sec))
+    section = _find_section(report_doc["payload"], section_key)
+    if section is not None:
+        filtered = _apply_section_filters(section, _text(filter1) or "All", _text(filter2) or "All")
+        return ApiResponse(data=SectionPayloadData(section_key=section_key, section=filtered))
 
     raise _error(404, 1004, "section_key", f"section not found: {section_key}")
