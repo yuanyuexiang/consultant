@@ -24,6 +24,7 @@ REQUIRED_SHEETS = {
 }
 
 TEMPLATE_V2_SHEETS = {"chart_config", "chart_data", "column_dictionary"}
+TEMPLATE_V2_TABLE_SHEETS = {"chart_config", "table_data", "column_dictionary"}
 
 
 def _normalize_sheet_name(name: str) -> str:
@@ -497,6 +498,130 @@ def _build_template_v2_payload(
     }
 
 
+def _build_template_table_payload(
+    path: Path,
+    cfg: dict[str, str],
+    rows: list[dict[str, Any]],
+    report_key: str,
+) -> dict[str, Any]:
+    panel_field = "panel" if any("panel" in row for row in rows) else None
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        panel_key = _text(row.get(panel_field), "Table 1") if panel_field else "Table 1"
+        grouped[panel_key].append(row)
+
+    panel_keys = sorted(grouped.keys())
+
+    charts: list[dict[str, Any]] = []
+    for idx, panel_key in enumerate(panel_keys, start=1):
+        panel_rows = grouped[panel_key]
+        first = panel_rows[0] if panel_rows else {}
+
+        columns_order: list[str] = []
+        for row in panel_rows:
+            for key in row.keys():
+                if key not in columns_order:
+                    columns_order.append(key)
+
+        table_columns = [{"key": key, "title": key} for key in columns_order]
+        table_rows = []
+        source_rows = []
+
+        for row_idx, row in enumerate(panel_rows, start=1):
+            normalized_row = {key: row.get(key) for key in columns_order}
+            table_rows.append(normalized_row)
+            source_rows.append(
+                {
+                    **normalized_row,
+                    "x": row.get("x"),
+                    "y": _number(row.get("y")),
+                    "legend": row.get("legend"),
+                    "type": row.get("type"),
+                    "shape": row.get("shape"),
+                    "line_style": row.get("line_style"),
+                    "line_width": _number(row.get("line_width")),
+                    "point_size": _number(row.get("point_size")),
+                    "color": row.get("color"),
+                    "y_format": row.get("y_format"),
+                    "filter1": _text(row.get("filter1"), "All"),
+                    "filter2": _text(row.get("filter2"), "All"),
+                    "_row_order": row_idx,
+                }
+            )
+
+        charts.append(
+            {
+                "chart_id": f"table_{idx}",
+                "chart_type": "table",
+                "title": panel_key,
+                "subtitle": None,
+                "echarts": None,
+                "table_data": {
+                    "columns": table_columns,
+                    "rows": table_rows,
+                },
+                "meta": {
+                    "source_template": "table",
+                    "panel": panel_key,
+                    "formatter": _text(first.get("y_format")) or None,
+                    "filters": {
+                        "filter1": _filter_options(source_rows, "filter1"),
+                        "filter2": _filter_options(source_rows, "filter2"),
+                    },
+                    "source_rows": source_rows,
+                },
+            }
+        )
+
+    report_name = cfg.get("title") or path.stem
+    report_type = cfg.get("type") or "analytics"
+    report_status = cfg.get("status") or "active"
+    subtitle = cfg.get("subtitle") or None
+
+    payload = {
+        "id": f"rpt_{report_key.replace('-', '_')}",
+        "report_key": report_key,
+        "name": report_name,
+        "type": report_type,
+        "status": report_status,
+        "chapters": [
+            {
+                "chapter_key": "chapter_1",
+                "title": report_name,
+                "subtitle": subtitle,
+                "order": 1,
+                "status": report_status,
+                "sections": [
+                    {
+                        "chapter_key": "chapter_1",
+                        "section_key": "section_1",
+                        "title": report_name,
+                        "subtitle": subtitle,
+                        "content": subtitle or "",
+                        "order": 1,
+                        "content_items": {"charts": charts, "kind": None, "items": None},
+                    }
+                ],
+            }
+        ],
+    }
+
+    return {
+        "report_meta": {
+            "report_key": report_key,
+            "name": report_name,
+            "type": report_type,
+            "status": report_status,
+        },
+        "sections": payload["chapters"][0]["sections"],
+        "charts": charts,
+        "chart_points": [],
+        "assembled_payload": payload,
+        "template_kind": "table",
+    }
+
+
 def _parse_template_v2(
     xls: pd.ExcelFile,
     path: Path,
@@ -522,6 +647,24 @@ def _parse_template_v2(
 
     report_key = override_report_key or cfg_map.get("report_key") or _slugify(path.stem)
     return _build_template_v2_payload(path, cfg_map, normalized_rows, kind, report_key)
+
+
+def _parse_table_template_v2(
+    xls: pd.ExcelFile,
+    path: Path,
+    override_report_key: str | None,
+    sheet_name_map: dict[str, str],
+) -> dict[str, Any]:
+    cfg_df = pd.read_excel(xls, sheet_name=sheet_name_map["chart_config"])
+    data_df = pd.read_excel(xls, sheet_name=sheet_name_map["table_data"])
+
+    cfg_map = _parse_cfg_map(cfg_df)
+    raw_rows = _df_to_records(data_df)
+    if not raw_rows:
+        raise ValueError("sheet 'table_data' is empty")
+
+    report_key = override_report_key or cfg_map.get("report_key") or _slugify(path.stem)
+    return _build_template_table_payload(path, cfg_map, raw_rows, report_key)
 
 
 def _parse_legacy_template(
@@ -575,6 +718,9 @@ def parse_excel(path: Path, override_report_key: str | None = None) -> dict[str,
 
     if TEMPLATE_V2_SHEETS.issubset(set(sheet_name_map.keys())):
         return _parse_template_v2(xls, path, override_report_key, sheet_name_map)
+
+    if TEMPLATE_V2_TABLE_SHEETS.issubset(set(sheet_name_map.keys())):
+        return _parse_table_template_v2(xls, path, override_report_key, sheet_name_map)
 
     if set(REQUIRED_SHEETS.keys()).issubset(set(sheet_name_map.keys())):
         return _parse_legacy_template(xls, override_report_key, sheet_name_map)

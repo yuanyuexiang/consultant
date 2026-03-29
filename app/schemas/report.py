@@ -10,6 +10,24 @@ class UploadExcelData(BaseModel):
     parsed_points: int
 
 
+class UploadFolderFileResult(BaseModel):
+    source_file: str
+    chapter_key: str | None = None
+    section_key: str | None = None
+    parsed_charts: int = 0
+    parsed_points: int = 0
+    status: str
+    detail: str | None = None
+
+
+class UploadFolderData(BaseModel):
+    report_key: str
+    total_files: int
+    succeeded_files: int
+    failed_files: int
+    files: list[UploadFolderFileResult] = Field(default_factory=list)
+
+
 class ReportListItem(BaseModel):
     report_key: str
     id: str

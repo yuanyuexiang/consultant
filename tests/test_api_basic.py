@@ -120,3 +120,158 @@ def test_upload_template_v2_auto_build_report(tmp_path):
     assert "filter2" in chart["meta"]["filters"]
     assert "source_rows" in chart["meta"]
     assert chart["echarts"]["xAxis"]["type"] == "time"
+
+
+def test_section_filter_query_uses_duckdb_rows(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    settings.runtime_dir = runtime_dir
+    settings.upload_dir = runtime_dir / "uploads"
+    settings.parse_dir = runtime_dir / "parsed"
+    settings.reports_dir = runtime_dir / "reports"
+    settings.meta_file = runtime_dir / "reports_index.json"
+    settings.duckdb_file = runtime_dir / "analytics.duckdb"
+    settings.ensure_dirs()
+
+    template_path = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "timeseries_chart_data_template.xlsx"
+    )
+
+    upload_resp = client.post(
+        "/consultant/api/v1/reports/upload-excel",
+        files={
+            "file": (
+                template_path.name,
+                template_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"report_key": "duckdb-filter-demo"},
+    )
+    assert upload_resp.status_code == 200, upload_resp.json()
+
+    all_resp = client.get(
+        "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
+        params={"filter1": "All", "filter2": "All"},
+    )
+    grade_resp = client.get(
+        "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
+        params={"filter1": "Grade 1", "filter2": "36 Month"},
+    )
+
+    assert all_resp.status_code == 200, all_resp.json()
+    assert grade_resp.status_code == 200, grade_resp.json()
+
+    all_chart = all_resp.json()["data"]["section"]["content_items"]["charts"][0]
+    grade_chart = grade_resp.json()["data"]["section"]["content_items"]["charts"][0]
+
+    assert all_chart["meta"]["filtered_rows_count"] > 0
+    assert grade_chart["meta"]["filtered_rows_count"] == 0
+
+
+def test_upload_table_template_auto_build_report(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    settings.runtime_dir = runtime_dir
+    settings.upload_dir = runtime_dir / "uploads"
+    settings.parse_dir = runtime_dir / "parsed"
+    settings.reports_dir = runtime_dir / "reports"
+    settings.meta_file = runtime_dir / "reports_index.json"
+    settings.duckdb_file = runtime_dir / "analytics.duckdb"
+    settings.ensure_dirs()
+
+    template_path = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "report20260327"
+        / "chapter1_section1.xlsx"
+    )
+    assert template_path.exists(), f"template not found: {template_path}"
+
+    upload_resp = client.post(
+        "/consultant/api/v1/reports/upload-excel",
+        files={
+            "file": (
+                template_path.name,
+                template_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"report_key": "table-template-demo"},
+    )
+
+    assert upload_resp.status_code == 200, upload_resp.json()
+
+    detail_resp = client.get("/consultant/api/v1/reports/table-template-demo")
+    assert detail_resp.status_code == 200
+    payload = detail_resp.json()["data"]["payload"]
+
+    chart = payload["chapters"][0]["sections"][0]["content_items"]["charts"][0]
+    assert chart["chart_type"] == "table"
+    assert chart["table_data"]["rows"]
+    assert chart["meta"]["filters"]["filter1"]
+    assert chart["meta"]["source_rows"]
+
+
+def test_upload_folder_mixed_templates(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    settings.runtime_dir = runtime_dir
+    settings.upload_dir = runtime_dir / "uploads"
+    settings.parse_dir = runtime_dir / "parsed"
+    settings.reports_dir = runtime_dir / "reports"
+    settings.meta_file = runtime_dir / "reports_index.json"
+    settings.duckdb_file = runtime_dir / "analytics.duckdb"
+    settings.ensure_dirs()
+
+    root = Path(__file__).resolve().parents[2] / "data" / "report20260327"
+    table_path = root / "chapter1_section1.xlsx"
+    chart_path = root / "chapter1_section3.xlsx"
+    assert table_path.exists(), f"template not found: {table_path}"
+    assert chart_path.exists(), f"template not found: {chart_path}"
+
+    files = [
+        (
+            "files",
+            (
+                table_path.name,
+                table_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        ),
+        (
+            "files",
+            (
+                chart_path.name,
+                chart_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        ),
+    ]
+
+    upload_resp = client.post(
+        "/consultant/api/v1/reports/upload-folder",
+        files=files,
+        data={"report_key": "folder-mixed-demo", "mode": "replace"},
+    )
+    assert upload_resp.status_code == 200, upload_resp.json()
+    body = upload_resp.json()
+    assert body["data"]["report_key"] == "folder-mixed-demo"
+    assert body["data"]["succeeded_files"] == 2
+    assert body["data"]["failed_files"] == 0
+
+    detail_resp = client.get("/consultant/api/v1/reports/folder-mixed-demo")
+    assert detail_resp.status_code == 200
+    payload = detail_resp.json()["data"]["payload"]
+    chapters = payload["chapters"]
+    assert chapters
+
+    all_sections = []
+    for chapter in chapters:
+        all_sections.extend(chapter.get("sections", []))
+
+    section_keys = {sec.get("section_key") for sec in all_sections if isinstance(sec, dict)}
+    assert "section_1" in section_keys
+    assert "section_3" in section_keys

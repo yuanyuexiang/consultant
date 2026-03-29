@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,10 @@ from app.schemas.report import (
     ReportUpdateRequest,
     SectionPayloadData,
     UploadExcelData,
+    UploadFolderData,
+    UploadFolderFileResult,
 )
+from app.services.duckdb_service import duckdb_service
 from app.services.hash_service import payload_hash
 from app.services.parse_service import parse_excel
 
@@ -59,6 +63,101 @@ def _build_chapters_from_sections(sections: list[dict]) -> list[dict]:
             }
         )
     return chapters
+
+
+def _parse_chapter_section_from_name(name: str, fallback_index: int) -> tuple[str, str, int, int]:
+    stem = Path(name).stem
+    match = re.search(r"chapter\s*(\d+)\s*[_-]?\s*section\s*(\d+)", stem, flags=re.IGNORECASE)
+    if match:
+        chapter_order = int(match.group(1))
+        section_order = int(match.group(2))
+        return (
+            f"chapter_{chapter_order}",
+            f"section_{section_order}",
+            chapter_order,
+            section_order,
+        )
+
+    return ("chapter_1", f"section_{fallback_index}", 1, fallback_index)
+
+
+def _first_section(payload: dict[str, Any]) -> dict[str, Any] | None:
+    chapters = payload.get("chapters")
+    if not isinstance(chapters, list):
+        return None
+
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
+        sections = chapter.get("sections")
+        if not isinstance(sections, list):
+            continue
+        for section in sections:
+            if isinstance(section, dict):
+                return section
+
+    return None
+
+
+def _merge_chapters(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    merged_map: dict[str, dict[str, Any]] = {}
+    for chapter in existing:
+        if not isinstance(chapter, dict):
+            continue
+        chapter_key = _text(chapter.get("chapter_key")) or "chapter_1"
+        chapter_copy = dict(chapter)
+        sections = chapter_copy.get("sections")
+        chapter_copy["sections"] = list(sections) if isinstance(sections, list) else []
+        merged_map[chapter_key] = chapter_copy
+
+    for chapter in incoming:
+        if not isinstance(chapter, dict):
+            continue
+        chapter_key = _text(chapter.get("chapter_key")) or "chapter_1"
+        target = merged_map.get(chapter_key)
+        incoming_sections = chapter.get("sections")
+        if not isinstance(incoming_sections, list):
+            incoming_sections = []
+
+        if target is None:
+            merged_map[chapter_key] = {
+                "chapter_key": chapter_key,
+                "title": chapter.get("title") or chapter_key,
+                "subtitle": chapter.get("subtitle"),
+                "order": int(chapter.get("order", 1)),
+                "status": chapter.get("status", "active"),
+                "sections": [dict(sec) for sec in incoming_sections if isinstance(sec, dict)],
+            }
+            continue
+
+        target_sections = target.get("sections")
+        if not isinstance(target_sections, list):
+            target_sections = []
+
+        index_by_key = {
+            _text(sec.get("section_key")): idx
+            for idx, sec in enumerate(target_sections)
+            if isinstance(sec, dict)
+        }
+
+        for section in incoming_sections:
+            if not isinstance(section, dict):
+                continue
+            section_key = _text(section.get("section_key"))
+            if section_key and section_key in index_by_key:
+                target_sections[index_by_key[section_key]] = dict(section)
+            else:
+                target_sections.append(dict(section))
+
+        target["sections"] = target_sections
+
+    merged = list(merged_map.values())
+    merged.sort(key=lambda c: int(c.get("order", 1)))
+    for chapter in merged:
+        sections = chapter.get("sections")
+        if isinstance(sections, list):
+            sections.sort(key=lambda sec: int((sec or {}).get("order", 1)))
+    return merged
 
 
 def _normalize_chapters(chapters: list[dict]) -> list[dict]:
@@ -239,62 +338,87 @@ def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]])
     }
 
 
-def _filter_source_rows(
-    rows: list[dict[str, Any]],
+def _apply_chart_filters(
+    report_key: str,
+    section_key: str,
+    chart: dict[str, Any],
     filter1: str,
     filter2: str,
-) -> list[dict[str, Any]]:
-    filtered: list[dict[str, Any]] = []
-    for row in rows:
-        row_filter1 = _text(row.get("filter1")) or "All"
-        row_filter2 = _text(row.get("filter2")) or "All"
-        if filter1 != "All" and row_filter1 != filter1:
-            continue
-        if filter2 != "All" and row_filter2 != filter2:
-            continue
-        filtered.append(row)
-    return filtered
-
-
-def _normalize_source_rows(chart: dict[str, Any]) -> list[dict[str, Any]]:
-    meta = chart.get("meta")
-    if not isinstance(meta, dict):
-        return []
-    source_rows = meta.get("source_rows")
-    if not isinstance(source_rows, list):
-        return []
-
-    rows: list[dict[str, Any]] = []
-    for item in source_rows:
-        if isinstance(item, dict):
-            rows.append(item)
-    return rows
-
-
-def _apply_chart_filters(chart: dict[str, Any], filter1: str, filter2: str) -> dict[str, Any]:
+) -> dict[str, Any]:
     chart_copy = dict(chart)
-    rows = _normalize_source_rows(chart_copy)
-    if not rows:
-        return chart_copy
+    chart_id = _text(chart_copy.get("chart_id"))
+    rows: list[dict[str, Any]] = []
 
-    filtered_rows = _filter_source_rows(rows, filter1, filter2)
+    if chart_id:
+        rows = duckdb_service.query_chart_rows(report_key, section_key, chart_id, filter1, filter2)
+
+    if not rows:
+        meta = chart_copy.get("meta") if isinstance(chart_copy.get("meta"), dict) else {}
+        chart_copy["meta"] = {
+            **meta,
+            "selected_filters": {"filter1": filter1, "filter2": filter2},
+            "filtered_rows_count": 0,
+        }
+        if chart_copy.get("chart_type") != "table":
+            option = chart_copy.get("echarts")
+            if isinstance(option, dict):
+                chart_copy["echarts"] = _build_filtered_option(option, [])
+        else:
+            table_data = chart_copy.get("table_data")
+            if isinstance(table_data, dict):
+                chart_copy["table_data"] = {**table_data, "rows": []}
+        return chart_copy
 
     if chart_copy.get("chart_type") != "table":
         option = chart_copy.get("echarts")
         if isinstance(option, dict):
-            chart_copy["echarts"] = _build_filtered_option(option, filtered_rows)
+            chart_copy["echarts"] = _build_filtered_option(option, rows)
+    else:
+        table_rows: list[dict[str, Any]] = []
+        for row in rows:
+            raw_row = row.get("_raw_row")
+            if isinstance(raw_row, dict):
+                table_rows.append(raw_row)
+                continue
+            table_rows.append(
+                {
+                    "x": row.get("x"),
+                    "y": row.get("y"),
+                    "legend": row.get("legend"),
+                    "filter1": row.get("filter1"),
+                    "filter2": row.get("filter2"),
+                }
+            )
+
+        table_data = chart_copy.get("table_data")
+        columns: list[dict[str, str]] = []
+        if isinstance(table_data, dict) and isinstance(table_data.get("columns"), list):
+            columns = [item for item in table_data.get("columns", []) if isinstance(item, dict)]
+        if not columns and table_rows:
+            columns = [{"key": key, "title": key} for key in table_rows[0].keys()]
+
+        chart_copy["table_data"] = {
+            "columns": columns,
+            "rows": table_rows,
+        }
 
     meta = chart_copy.get("meta") if isinstance(chart_copy.get("meta"), dict) else {}
     chart_copy["meta"] = {
         **meta,
         "selected_filters": {"filter1": filter1, "filter2": filter2},
-        "filtered_rows_count": len(filtered_rows),
+        "filtered_rows_count": len(rows),
     }
     return chart_copy
 
 
-def _apply_section_filters(section: dict[str, Any], filter1: str, filter2: str) -> dict[str, Any]:
+def _apply_section_filters(
+    report_key: str,
+    section: dict[str, Any],
+    filter1: str,
+    filter2: str,
+) -> dict[str, Any]:
     section_copy = dict(section)
+    section_key = _text(section_copy.get("section_key"))
     content_items = section_copy.get("content_items")
     if not isinstance(content_items, dict):
         return section_copy
@@ -304,7 +428,7 @@ def _apply_section_filters(section: dict[str, Any], filter1: str, filter2: str) 
         return section_copy
 
     filtered_charts = [
-        _apply_chart_filters(chart, filter1, filter2)
+        _apply_chart_filters(report_key, section_key, chart, filter1, filter2)
         for chart in charts
         if isinstance(chart, dict)
     ]
@@ -351,6 +475,7 @@ def create_report(req: ReportCreateRequest):
 
     digest = payload_hash(payload)
     saved_at = repo.save_report(req.report_key, payload, digest)
+    duckdb_service.replace_report_rows(req.report_key, payload)
     repo.upsert_report_index(
         req.report_key,
         payload,
@@ -392,6 +517,7 @@ def update_report(report_key: str, req: ReportUpdateRequest):
 
     digest = payload_hash(payload)
     saved_at = repo.save_report(report_key, payload, digest)
+    duckdb_service.replace_report_rows(report_key, payload)
     repo.upsert_report_index(
         report_key,
         payload,
@@ -442,6 +568,7 @@ async def upload_excel(file: UploadFile = File(...), report_key: str | None = Fo
     if isinstance(assembled_payload, dict):
         digest = payload_hash(assembled_payload)
         saved_at = repo.save_report(key, assembled_payload, digest)
+        duckdb_service.replace_report_rows(key, assembled_payload)
         repo.upsert_report_index(
             key,
             assembled_payload,
@@ -460,6 +587,160 @@ async def upload_excel(file: UploadFile = File(...), report_key: str | None = Fo
         parsed_points=parsed_points,
     )
     return ApiResponse(data=data)
+
+
+@router.post("/upload-folder", response_model=ApiResponse[UploadFolderData])
+async def upload_folder(
+    files: list[UploadFile] = File(...),
+    report_key: str | None = Form(default=None),
+    mode: str = Form(default="replace"),
+):
+    if mode not in {"replace", "append"}:
+        raise _error(400, 1001, "mode", "mode must be 'replace' or 'append'")
+    if not files:
+        raise _error(400, 1001, "files", "at least one file is required")
+
+    key = _text(report_key) or "folder-upload"
+    key = re.sub(r"[^a-zA-Z0-9_-]+", "-", key).strip("-") or "folder-upload"
+
+    chapter_buckets: dict[str, dict[str, Any]] = {}
+    results: list[UploadFolderFileResult] = []
+    fallback_index = 1
+
+    for item in files:
+        filename = Path(item.filename or "").name
+        if not filename.lower().endswith(".xlsx"):
+            results.append(
+                UploadFolderFileResult(
+                    source_file=filename or "unknown",
+                    status="failed",
+                    detail="unsupported file extension",
+                )
+            )
+            continue
+
+        chapter_key, section_key, chapter_order, section_order = _parse_chapter_section_from_name(
+            filename,
+            fallback_index,
+        )
+        fallback_index += 1
+
+        content = await item.read()
+        dest = settings.upload_dir / filename
+        dest.write_bytes(content)
+
+        try:
+            parsed = parse_excel(dest, override_report_key=key)
+            repo.save_parsed(key, filename, parsed)
+            assembled = parsed.get("assembled_payload")
+            if not isinstance(assembled, dict):
+                raise ValueError("assembled payload missing")
+            section = _first_section(assembled)
+            if not isinstance(section, dict):
+                raise ValueError("section payload missing")
+        except ValueError as exc:
+            results.append(
+                UploadFolderFileResult(
+                    source_file=filename,
+                    chapter_key=chapter_key,
+                    section_key=section_key,
+                    status="failed",
+                    detail=str(exc),
+                )
+            )
+            continue
+
+        section_copy = dict(section)
+        section_copy["chapter_key"] = chapter_key
+        section_copy["section_key"] = section_key
+        section_copy["title"] = section_copy.get("title") or Path(filename).stem
+        section_copy["content"] = section_copy.get("content") or ""
+        section_copy["order"] = section_order
+        section_copy["content_items"] = section_copy.get("content_items") or {
+            "charts": [],
+            "kind": None,
+            "items": None,
+        }
+
+        bucket = chapter_buckets.get(chapter_key)
+        if bucket is None:
+            bucket = {
+                "chapter_key": chapter_key,
+                "title": chapter_key,
+                "subtitle": None,
+                "order": chapter_order,
+                "status": "active",
+                "sections": [],
+            }
+            chapter_buckets[chapter_key] = bucket
+        bucket["sections"].append(section_copy)
+
+        results.append(
+            UploadFolderFileResult(
+                source_file=filename,
+                chapter_key=chapter_key,
+                section_key=section_key,
+                parsed_charts=len(parsed.get("charts", [])),
+                parsed_points=len(parsed.get("chart_points", [])),
+                status="success",
+            )
+        )
+
+    success_count = sum(1 for row in results if row.status == "success")
+    failure_count = len(results) - success_count
+    if success_count == 0:
+        detail = results[0].detail if results else "no valid files uploaded"
+        raise _error(400, 1001, "files", detail or "no valid files uploaded")
+
+    incoming_chapters = list(chapter_buckets.values())
+    incoming_chapters.sort(key=lambda chapter: int(chapter.get("order", 1)))
+    for chapter in incoming_chapters:
+        sections = chapter.get("sections")
+        if isinstance(sections, list):
+            sections.sort(key=lambda sec: int((sec or {}).get("order", 1)))
+
+    payload = {
+        "id": f"rpt_{key.replace('-', '_')}",
+        "report_key": key,
+        "name": key,
+        "type": "analytics",
+        "status": "active",
+        "chapters": incoming_chapters,
+    }
+
+    if mode == "append" and repo.exists_report(key):
+        existing = repo.load_report(key)
+        existing_payload = existing.get("payload") if isinstance(existing, dict) else None
+        if isinstance(existing_payload, dict):
+            existing_chapters = existing_payload.get("chapters")
+            payload = {
+                **existing_payload,
+                "chapters": _merge_chapters(
+                    existing_chapters if isinstance(existing_chapters, list) else [],
+                    incoming_chapters,
+                ),
+            }
+
+    digest = payload_hash(payload)
+    saved_at = repo.save_report(key, payload, digest)
+    duckdb_service.replace_report_rows(key, payload)
+    repo.upsert_report_index(
+        key,
+        payload,
+        status=payload.get("status", "active"),
+        payload_hash=digest,
+        saved_at=saved_at,
+    )
+
+    return ApiResponse(
+        data=UploadFolderData(
+            report_key=key,
+            total_files=len(results),
+            succeeded_files=success_count,
+            failed_files=failure_count,
+            files=results,
+        )
+    )
 
 
 @router.get("", response_model=ApiResponse[ReportListData])
@@ -491,7 +772,12 @@ def get_section(
 
     section = _find_section(report_doc["payload"], section_key)
     if section is not None:
-        filtered = _apply_section_filters(section, _text(filter1) or "All", _text(filter2) or "All")
+        filtered = _apply_section_filters(
+            report_key,
+            section,
+            _text(filter1) or "All",
+            _text(filter2) or "All",
+        )
         return ApiResponse(data=SectionPayloadData(section_key=section_key, section=filtered))
 
     raise _error(404, 1004, "section_key", f"section not found: {section_key}")
