@@ -1,26 +1,21 @@
 services:
-  consultant:
-    container_name: consultant
-    image: yuanyuexiang/consultant:v1
+  sentinel:
+    container_name: sentinel
+    image: yuanyuexiang/sentinel:v1
     restart: always
     ports:
-      - "8000"
+      - "3000"
     environment:
       - APP_ENV=development
       - DEBUG=true
-    #depends_on:
-      #- postgres
-      #- milvus
     networks:
       - matrix-network
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.consultant.rule=Host(`atlas.asksquirrel.ai`) && PathPrefix(`/consultant`)" # 替换为你的域名
-      - "traefik.http.routers.consultant.entrypoints=websecure"
-      - "traefik.http.routers.consultant.service=consultant"
-      - "traefik.http.routers.consultant.tls=true"
-      - "traefik.http.routers.consultant.tls.certresolver=cloudflare"
-      - "traefik.http.services.consultant.loadbalancer.server.port=8000"
+      - "traefik.http.routers.sentinel.rule=Host(`admin.10.140.208.14.nip.io`)" # 替换为你的域名
+      - "traefik.http.routers.sentinel.entrypoints=web"
+      - "traefik.http.routers.sentinel.service=sentinel"
+      - "traefik.http.services.sentinel.loadbalancer.server.port=3000"
 
 networks:
   matrix-network:
