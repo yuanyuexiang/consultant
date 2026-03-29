@@ -245,6 +245,13 @@ def _series_type(value: str) -> str:
     return "line" if "line" in value else "scatter"
 
 
+def _normalize_filter_value(value: Any) -> str:
+    text = _text(value)
+    if not text or text.lower() == "all":
+        return "ALL"
+    return text
+
+
 def _collect_category_x(rows: list[dict[str, Any]]) -> list[str | float]:
     ordered: list[str | float] = []
     seen: set[str] = set()
@@ -433,6 +440,12 @@ def _apply_section_filters(
         if isinstance(chart, dict)
     ]
     section_copy["content_items"] = {**content_items, "charts": filtered_charts}
+
+    section_meta = section_copy.get("meta") if isinstance(section_copy.get("meta"), dict) else {}
+    section_copy["meta"] = {
+        **section_meta,
+        "selected_filters": {"filter1": filter1, "filter2": filter2},
+    }
     return section_copy
 
 
@@ -762,8 +775,8 @@ def get_report(report_key: str):
 def get_section(
     report_key: str,
     section_key: str,
-    filter1: str = Query(default="All"),
-    filter2: str = Query(default="All"),
+    filter1: str = Query(default="ALL"),
+    filter2: str = Query(default="ALL"),
 ):
     try:
         report_doc = repo.load_report(report_key)
@@ -772,11 +785,13 @@ def get_section(
 
     section = _find_section(report_doc["payload"], section_key)
     if section is not None:
+        normalized_filter1 = _normalize_filter_value(filter1)
+        normalized_filter2 = _normalize_filter_value(filter2)
         filtered = _apply_section_filters(
             report_key,
             section,
-            _text(filter1) or "All",
-            _text(filter2) or "All",
+            normalized_filter1,
+            normalized_filter2,
         )
         return ApiResponse(data=SectionPayloadData(section_key=section_key, section=filtered))
 

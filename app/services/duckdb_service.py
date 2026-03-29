@@ -101,12 +101,14 @@ class DuckDBService:
         ]
         params: list[Any] = [report_key, section_key, chart_id]
 
-        if filter1 != "All":
-            sql.append("AND COALESCE(filter1, 'All') = ?")
-            params.append(filter1)
-        if filter2 != "All":
-            sql.append("AND COALESCE(filter2, 'All') = ?")
-            params.append(filter2)
+        normalized_filter1 = (filter1 or "").strip() or "ALL"
+        normalized_filter2 = (filter2 or "").strip() or "ALL"
+
+        # ALL is a peer filter value, not a wildcard. Always apply exact filter matching.
+        sql.append("AND COALESCE(UPPER(filter1), 'ALL') = UPPER(?)")
+        params.append(normalized_filter1)
+        sql.append("AND COALESCE(UPPER(filter2), 'ALL') = UPPER(?)")
+        params.append(normalized_filter2)
 
         sql.append("ORDER BY COALESCE(row_order, 0), x_value, legend")
 
@@ -200,7 +202,9 @@ class DuckDBService:
     @staticmethod
     def _coalesce_filter(value: Any) -> str:
         text = DuckDBService._text(value)
-        return text or "All"
+        if not text or text.lower() == "all":
+            return "ALL"
+        return text
 
     @staticmethod
     def _number(value: Any) -> float | None:

@@ -156,18 +156,27 @@ def test_section_filter_query_uses_duckdb_rows(tmp_path):
         "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
         params={"filter1": "All", "filter2": "All"},
     )
+    default_resp = client.get(
+        "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
+    )
     grade_resp = client.get(
         "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
         params={"filter1": "Grade 1", "filter2": "36 Month"},
     )
 
     assert all_resp.status_code == 200, all_resp.json()
+    assert default_resp.status_code == 200, default_resp.json()
     assert grade_resp.status_code == 200, grade_resp.json()
 
     all_chart = all_resp.json()["data"]["section"]["content_items"]["charts"][0]
+    default_chart = default_resp.json()["data"]["section"]["content_items"]["charts"][0]
     grade_chart = grade_resp.json()["data"]["section"]["content_items"]["charts"][0]
+    default_section = default_resp.json()["data"]["section"]
 
     assert all_chart["meta"]["filtered_rows_count"] > 0
+    assert default_chart["meta"]["filtered_rows_count"] == all_chart["meta"]["filtered_rows_count"]
+    assert default_chart["meta"]["selected_filters"] == {"filter1": "ALL", "filter2": "ALL"}
+    assert default_section["meta"]["selected_filters"] == {"filter1": "ALL", "filter2": "ALL"}
     assert grade_chart["meta"]["filtered_rows_count"] == 0
 
 
