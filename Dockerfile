@@ -11,12 +11,11 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy source and install project
 COPY . .
-RUN uv sync --frozen --no-dev
 
 # ============================================
 # Stage 2: Runtime
 # ============================================
-FROM python:3.12-slim AS runtime
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS runtime
 
 WORKDIR /app
 

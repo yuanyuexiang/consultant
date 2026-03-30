@@ -4,7 +4,7 @@ services:
     image: yuanyuexiang/consultant:v1
     restart: always
     ports:
-      - "3000"
+      - "8000"
     volumes:
       - ./consultant:/app/runtime
     environment:
@@ -20,7 +20,7 @@ services:
       - "traefik.http.routers.consultant-admin.rule=Host(`admin.10.140.208.14.nip.io`) && PathPrefix(`/consultant`)" # 替换为你的域名
       - "traefik.http.routers.consultant-admin.entrypoints=web"
       - "traefik.http.routers.consultant-admin.service=consultant"
-      - "traefik.http.services.consultant.loadbalancer.server.port=3000"
+      - "traefik.http.services.consultant.loadbalancer.server.port=8000"
 
 networks:
   matrix-network:
