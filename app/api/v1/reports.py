@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 import re
+from threading import Lock
+from uuid import uuid4
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -22,6 +26,8 @@ from app.schemas.report import (
     UploadExcelData,
     UploadFolderData,
     UploadFolderFileResult,
+    UploadFolderTaskAcceptedData,
+    UploadFolderTaskStatusData,
 )
 from app.services.duckdb_service import duckdb_service
 from app.services.hash_service import payload_hash
@@ -29,6 +35,9 @@ from app.services.parse_service import parse_excel
 
 router = APIRouter(prefix="/v1/reports", tags=["reports"])
 repo = StorageRepository()
+upload_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="upload-folder")
+upload_tasks: dict[str, dict[str, Any]] = {}
+upload_tasks_lock = Lock()
 
 
 def _flatten_chapter_sections(chapters: list[dict]) -> list[dict]:
@@ -243,6 +252,237 @@ def _symbol(value: str) -> str:
 
 def _series_type(value: str) -> str:
     return "line" if "line" in value else "scatter"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _set_upload_task(task_id: str, **updates: Any) -> dict[str, Any]:
+    with upload_tasks_lock:
+        task = upload_tasks.get(task_id)
+        if task is None:
+            raise KeyError(task_id)
+        task.update(updates)
+        upload_tasks[task_id] = task
+        return dict(task)
+
+
+def _get_upload_task(task_id: str) -> dict[str, Any] | None:
+    with upload_tasks_lock:
+        task = upload_tasks.get(task_id)
+        if task is None:
+            return None
+        return dict(task)
+
+
+def _append_upload_result(task_id: str, result: UploadFolderFileResult) -> None:
+    with upload_tasks_lock:
+        task = upload_tasks.get(task_id)
+        if task is None:
+            return
+        rows = list(task.get("files", []))
+        rows.append(result.model_dump())
+        task["files"] = rows
+        task["processed_files"] = int(task.get("processed_files", 0)) + 1
+        if result.status == "success":
+            task["succeeded_files"] = int(task.get("succeeded_files", 0)) + 1
+        else:
+            task["failed_files"] = int(task.get("failed_files", 0)) + 1
+        upload_tasks[task_id] = task
+
+
+def _build_task_status(task: dict[str, Any]) -> UploadFolderTaskStatusData:
+    result_payload = task.get("result")
+    result = UploadFolderData(**result_payload) if isinstance(result_payload, dict) else None
+    return UploadFolderTaskStatusData(
+        task_id=str(task["task_id"]),
+        report_key=str(task["report_key"]),
+        status=str(task["status"]),
+        phase=str(task.get("phase") or "queued"),
+        total_files=int(task.get("total_files", 0)),
+        processed_files=int(task.get("processed_files", 0)),
+        succeeded_files=int(task.get("succeeded_files", 0)),
+        failed_files=int(task.get("failed_files", 0)),
+        submitted_at=str(task.get("submitted_at") or ""),
+        started_at=task.get("started_at"),
+        finished_at=task.get("finished_at"),
+        files=[UploadFolderFileResult(**row) for row in task.get("files", [])],
+        detail=task.get("detail"),
+        result=result,
+    )
+
+
+def _run_upload_folder_task(
+    task_id: str,
+    report_key: str,
+    report_name: str,
+    mode: str,
+    staged_files: list[tuple[str, Path]],
+) -> None:
+    _set_upload_task(
+        task_id,
+        status="running",
+        phase="parsing",
+        started_at=_utc_now_iso(),
+        detail=None,
+    )
+
+    try:
+        chapter_buckets: dict[str, dict[str, Any]] = {}
+        fallback_index = 1
+
+        for filename, path in staged_files:
+            chapter_key, section_key, chapter_order, section_order = _parse_chapter_section_from_name(
+                filename,
+                fallback_index,
+            )
+            fallback_index += 1
+
+            try:
+                parsed = parse_excel(path, override_report_key=report_key)
+                # Keep parsed artifact for debugging and replay.
+                repo.save_parsed(report_key, filename, parsed)
+
+                assembled = parsed.get("assembled_payload")
+                if not isinstance(assembled, dict):
+                    raise ValueError("assembled payload missing")
+                section = _first_section(assembled)
+                if not isinstance(section, dict):
+                    raise ValueError("section payload missing")
+            except ValueError as exc:
+                _append_upload_result(
+                    task_id,
+                    UploadFolderFileResult(
+                        source_file=filename,
+                        chapter_key=chapter_key,
+                        section_key=section_key,
+                        status="failed",
+                        detail=str(exc),
+                    ),
+                )
+                continue
+
+            section_copy = dict(section)
+            section_copy["chapter_key"] = chapter_key
+            section_copy["section_key"] = section_key
+            section_copy["title"] = section_copy.get("title") or Path(filename).stem
+            section_copy["content"] = section_copy.get("content") or ""
+            section_copy["order"] = section_order
+            section_copy["content_items"] = section_copy.get("content_items") or {
+                "charts": [],
+                "kind": None,
+                "items": None,
+            }
+
+            bucket = chapter_buckets.get(chapter_key)
+            if bucket is None:
+                bucket = {
+                    "chapter_key": chapter_key,
+                    "title": chapter_key,
+                    "subtitle": None,
+                    "order": chapter_order,
+                    "status": "active",
+                    "sections": [],
+                }
+                chapter_buckets[chapter_key] = bucket
+            bucket["sections"].append(section_copy)
+
+            _append_upload_result(
+                task_id,
+                UploadFolderFileResult(
+                    source_file=filename,
+                    chapter_key=chapter_key,
+                    section_key=section_key,
+                    parsed_charts=len(parsed.get("charts", [])),
+                    parsed_points=len(parsed.get("chart_points", [])),
+                    status="success",
+                ),
+            )
+
+        task_snapshot = _get_upload_task(task_id)
+        if task_snapshot is None:
+            return
+
+        success_count = int(task_snapshot.get("succeeded_files", 0))
+        total_files = int(task_snapshot.get("total_files", 0))
+        failure_count = int(task_snapshot.get("failed_files", 0))
+        rows = [UploadFolderFileResult(**row) for row in task_snapshot.get("files", [])]
+
+        if success_count == 0:
+            first_detail = next((row.detail for row in rows if row.detail), "no valid files uploaded")
+            _set_upload_task(
+                task_id,
+                status="failed",
+                phase="failed",
+                detail=first_detail,
+                finished_at=_utc_now_iso(),
+            )
+            return
+
+        incoming_chapters = list(chapter_buckets.values())
+        incoming_chapters.sort(key=lambda chapter: int(chapter.get("order", 1)))
+        for chapter in incoming_chapters:
+            sections = chapter.get("sections")
+            if isinstance(sections, list):
+                sections.sort(key=lambda sec: int((sec or {}).get("order", 1)))
+
+        payload = {
+            "id": f"rpt_{report_key.replace('-', '_')}",
+            "report_key": report_key,
+            "name": report_name,
+            "type": "analytics",
+            "status": "active",
+            "chapters": incoming_chapters,
+        }
+
+        if mode == "append" and repo.exists_report(report_key):
+            existing = repo.load_report(report_key)
+            existing_payload = existing.get("payload") if isinstance(existing, dict) else None
+            if isinstance(existing_payload, dict):
+                existing_chapters = existing_payload.get("chapters")
+                payload = {
+                    **existing_payload,
+                    "name": report_name,
+                    "chapters": _merge_chapters(
+                        existing_chapters if isinstance(existing_chapters, list) else [],
+                        incoming_chapters,
+                    ),
+                }
+
+        _set_upload_task(task_id, phase="persisting")
+        digest = payload_hash(payload)
+        saved_at = repo.save_report(report_key, payload, digest)
+        duckdb_service.replace_report_rows(report_key, payload)
+        repo.upsert_report_index(
+            report_key,
+            payload,
+            status=payload.get("status", "active"),
+            payload_hash=digest,
+            saved_at=saved_at,
+        )
+
+        _set_upload_task(
+            task_id,
+            status="succeeded",
+            phase="completed",
+            finished_at=_utc_now_iso(),
+            result=UploadFolderData(
+                report_key=report_key,
+                total_files=total_files,
+                succeeded_files=success_count,
+                failed_files=failure_count,
+                files=rows,
+            ).model_dump(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        _set_upload_task(
+            task_id,
+            status="failed",
+            phase="failed",
+            detail=str(exc),
+            finished_at=_utc_now_iso(),
+        )
 
 
 def _normalize_filter_value(value: Any) -> str:
@@ -602,10 +842,11 @@ async def upload_excel(file: UploadFile = File(...), report_key: str | None = Fo
     return ApiResponse(data=data)
 
 
-@router.post("/upload-folder", response_model=ApiResponse[UploadFolderData])
+@router.post("/upload-folder", response_model=ApiResponse[UploadFolderTaskAcceptedData])
 async def upload_folder(
     files: list[UploadFile] = File(...),
-    report_key: str | None = Form(default=None),
+    report_key: str = Form(...),
+    report_name: str = Form(...),
     mode: str = Form(default="replace"),
 ):
     if mode not in {"replace", "append"}:
@@ -613,147 +854,88 @@ async def upload_folder(
     if not files:
         raise _error(400, 1001, "files", "at least one file is required")
 
-    key = _text(report_key) or "folder-upload"
-    key = re.sub(r"[^a-zA-Z0-9_-]+", "-", key).strip("-") or "folder-upload"
+    report_name_text = _text(report_name)
+    if not report_name_text:
+        raise _error(400, 1001, "report_name", "report_name is required")
 
-    chapter_buckets: dict[str, dict[str, Any]] = {}
-    results: list[UploadFolderFileResult] = []
-    fallback_index = 1
+    key_raw = _text(report_key)
+    if not key_raw:
+        raise _error(400, 1001, "report_key", "report_key is required")
+
+    key = re.sub(r"[^a-zA-Z0-9_-]+", "-", key_raw).strip("-")
+    if not key:
+        raise _error(400, 1001, "report_key", "report_key is invalid")
+
+    task_id = uuid4().hex
+    task_upload_root = settings.upload_dir / key
+    task_upload_root.mkdir(parents=True, exist_ok=True)
+
+    staged_files: list[tuple[str, Path]] = []
+    initial_rows: list[dict[str, Any]] = []
 
     for item in files:
         filename = Path(item.filename or "").name
+        if not filename:
+            filename = f"unknown-{uuid4().hex[:8]}.xlsx"
+
         if not filename.lower().endswith(".xlsx"):
-            results.append(
-                UploadFolderFileResult(
-                    source_file=filename or "unknown",
-                    status="failed",
-                    detail="unsupported file extension",
-                )
-            )
-            continue
-
-        chapter_key, section_key, chapter_order, section_order = _parse_chapter_section_from_name(
-            filename,
-            fallback_index,
-        )
-        fallback_index += 1
-
-        content = await item.read()
-        dest = settings.upload_dir / filename
-        dest.write_bytes(content)
-
-        try:
-            parsed = parse_excel(dest, override_report_key=key)
-            repo.save_parsed(key, filename, parsed)
-            assembled = parsed.get("assembled_payload")
-            if not isinstance(assembled, dict):
-                raise ValueError("assembled payload missing")
-            section = _first_section(assembled)
-            if not isinstance(section, dict):
-                raise ValueError("section payload missing")
-        except ValueError as exc:
-            results.append(
+            initial_rows.append(
                 UploadFolderFileResult(
                     source_file=filename,
-                    chapter_key=chapter_key,
-                    section_key=section_key,
                     status="failed",
-                    detail=str(exc),
-                )
+                    detail="unsupported file extension",
+                ).model_dump()
             )
             continue
 
-        section_copy = dict(section)
-        section_copy["chapter_key"] = chapter_key
-        section_copy["section_key"] = section_key
-        section_copy["title"] = section_copy.get("title") or Path(filename).stem
-        section_copy["content"] = section_copy.get("content") or ""
-        section_copy["order"] = section_order
-        section_copy["content_items"] = section_copy.get("content_items") or {
-            "charts": [],
-            "kind": None,
-            "items": None,
-        }
+        content = await item.read()
+        dest = task_upload_root / filename
+        dest.write_bytes(content)
+        staged_files.append((filename, dest))
 
-        bucket = chapter_buckets.get(chapter_key)
-        if bucket is None:
-            bucket = {
-                "chapter_key": chapter_key,
-                "title": chapter_key,
-                "subtitle": None,
-                "order": chapter_order,
-                "status": "active",
-                "sections": [],
-            }
-            chapter_buckets[chapter_key] = bucket
-        bucket["sections"].append(section_copy)
+    if not staged_files:
+        detail = "no valid xlsx files uploaded"
+        raise _error(400, 1001, "files", detail)
 
-        results.append(
-            UploadFolderFileResult(
-                source_file=filename,
-                chapter_key=chapter_key,
-                section_key=section_key,
-                parsed_charts=len(parsed.get("charts", [])),
-                parsed_points=len(parsed.get("chart_points", [])),
-                status="success",
-            )
-        )
-
-    success_count = sum(1 for row in results if row.status == "success")
-    failure_count = len(results) - success_count
-    if success_count == 0:
-        detail = results[0].detail if results else "no valid files uploaded"
-        raise _error(400, 1001, "files", detail or "no valid files uploaded")
-
-    incoming_chapters = list(chapter_buckets.values())
-    incoming_chapters.sort(key=lambda chapter: int(chapter.get("order", 1)))
-    for chapter in incoming_chapters:
-        sections = chapter.get("sections")
-        if isinstance(sections, list):
-            sections.sort(key=lambda sec: int((sec or {}).get("order", 1)))
-
-    payload = {
-        "id": f"rpt_{key.replace('-', '_')}",
+    now = _utc_now_iso()
+    queued = {
+        "task_id": task_id,
         "report_key": key,
-        "name": key,
-        "type": "analytics",
-        "status": "active",
-        "chapters": incoming_chapters,
+        "status": "queued",
+        "phase": "queued",
+        "total_files": len(files),
+        "processed_files": len(initial_rows),
+        "succeeded_files": 0,
+        "failed_files": len(initial_rows),
+        "submitted_at": now,
+        "started_at": None,
+        "finished_at": None,
+        "files": initial_rows,
+        "detail": None,
+        "result": None,
     }
+    with upload_tasks_lock:
+        upload_tasks[task_id] = queued
 
-    if mode == "append" and repo.exists_report(key):
-        existing = repo.load_report(key)
-        existing_payload = existing.get("payload") if isinstance(existing, dict) else None
-        if isinstance(existing_payload, dict):
-            existing_chapters = existing_payload.get("chapters")
-            payload = {
-                **existing_payload,
-                "chapters": _merge_chapters(
-                    existing_chapters if isinstance(existing_chapters, list) else [],
-                    incoming_chapters,
-                ),
-            }
-
-    digest = payload_hash(payload)
-    saved_at = repo.save_report(key, payload, digest)
-    duckdb_service.replace_report_rows(key, payload)
-    repo.upsert_report_index(
-        key,
-        payload,
-        status=payload.get("status", "active"),
-        payload_hash=digest,
-        saved_at=saved_at,
-    )
+    upload_executor.submit(_run_upload_folder_task, task_id, key, report_name_text, mode, staged_files)
 
     return ApiResponse(
-        data=UploadFolderData(
+        data=UploadFolderTaskAcceptedData(
+            task_id=task_id,
             report_key=key,
-            total_files=len(results),
-            succeeded_files=success_count,
-            failed_files=failure_count,
-            files=results,
+            status="queued",
+            total_files=len(files),
+            submitted_at=now,
         )
     )
+
+
+@router.get("/upload-folder/tasks/{task_id}", response_model=ApiResponse[UploadFolderTaskStatusData])
+def get_upload_folder_task(task_id: str):
+    task = _get_upload_task(task_id)
+    if task is None:
+        raise _error(404, 1004, "task_id", f"upload task not found: {task_id}")
+    return ApiResponse(data=_build_task_status(task))
 
 
 @router.get("", response_model=ApiResponse[ReportListData])

@@ -1,4 +1,5 @@
 from pathlib import Path
+from time import monotonic, sleep
 
 from fastapi.testclient import TestClient
 
@@ -6,6 +7,20 @@ from app.config import settings
 from app.main import app
 
 client = TestClient(app)
+
+
+def _wait_upload_folder_task(task_id: str, timeout_s: float = 30.0) -> dict:
+    deadline = monotonic() + timeout_s
+    while monotonic() < deadline:
+        resp = client.get(f"/consultant/api/v1/reports/upload-folder/tasks/{task_id}")
+        assert resp.status_code == 200, resp.json()
+        body = resp.json()
+        data = body["data"]
+        status = data["status"]
+        if status in {"succeeded", "failed"}:
+            return data
+        sleep(0.05)
+    raise AssertionError(f"upload task timeout: {task_id}")
 
 
 def test_health():
@@ -263,13 +278,19 @@ def test_upload_folder_mixed_templates(tmp_path):
     upload_resp = client.post(
         "/consultant/api/v1/reports/upload-folder",
         files=files,
-        data={"report_key": "folder-mixed-demo", "mode": "replace"},
+        data={"report_key": "folder-mixed-demo", "report_name": "Folder Mixed Demo", "mode": "replace"},
     )
     assert upload_resp.status_code == 200, upload_resp.json()
     body = upload_resp.json()
     assert body["data"]["report_key"] == "folder-mixed-demo"
-    assert body["data"]["succeeded_files"] == 2
-    assert body["data"]["failed_files"] == 0
+    assert body["data"]["status"] == "queued"
+    task_id = body["data"]["task_id"]
+
+    task_data = _wait_upload_folder_task(task_id)
+    assert task_data["status"] == "succeeded"
+    assert task_data["succeeded_files"] == 2
+    assert task_data["failed_files"] == 0
+    assert task_data["result"]["report_key"] == "folder-mixed-demo"
 
     detail_resp = client.get("/consultant/api/v1/reports/folder-mixed-demo")
     assert detail_resp.status_code == 200
@@ -284,3 +305,8 @@ def test_upload_folder_mixed_templates(tmp_path):
     section_keys = {sec.get("section_key") for sec in all_sections if isinstance(sec, dict)}
     assert "section_1" in section_keys
     assert "section_3" in section_keys
+
+    upload_subdir = settings.upload_dir / "folder-mixed-demo"
+    assert upload_subdir.exists()
+    assert (upload_subdir / table_path.name).exists()
+    assert (upload_subdir / chart_path.name).exists()

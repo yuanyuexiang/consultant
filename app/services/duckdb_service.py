@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import duckdb
@@ -12,6 +13,7 @@ from app.config import settings
 class DuckDBService:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or settings.duckdb_file
+        self._write_lock = Lock()
         self._ensure_schema()
 
     def _connect(self):
@@ -44,31 +46,50 @@ class DuckDBService:
             )
             con.execute("ALTER TABLE report_chart_rows ADD COLUMN IF NOT EXISTS raw_row_json TEXT")
             con.execute("ALTER TABLE report_chart_rows ADD COLUMN IF NOT EXISTS row_order BIGINT")
-            con.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_report_chart_rows
-                ON report_chart_rows(report_key, section_key, chart_id, filter1, filter2)
-                """
-            )
+            # Known DuckDB issue: DELETE with this secondary index can trigger fatal
+            # "Failed to delete all rows from index" under heavy batch updates.
+            # Prefer stability over this index optimization.
+            con.execute("DROP INDEX IF EXISTS idx_report_chart_rows")
 
     def replace_report_rows(self, report_key: str, payload: dict[str, Any]) -> None:
         rows = self._extract_rows(report_key, payload)
+        # DuckDB has a single-writer model; serializing writes avoids index/delete races
+        # when multiple folder-upload tasks persist rows concurrently.
+        with self._write_lock:
+            try:
+                self._replace_report_rows_once(report_key, rows)
+            except duckdb.Error as exc:
+                # Recover from fatal index-related invalidation by dropping legacy index
+                # and retrying once with a fresh connection.
+                detail = str(exc)
+                if "delete all rows from index" not in detail.lower() and "database has been invalidated" not in detail.lower():
+                    raise
+                with self._connect() as con:
+                    con.execute("DROP INDEX IF EXISTS idx_report_chart_rows")
+                self._replace_report_rows_once(report_key, rows)
+
+    def _replace_report_rows_once(self, report_key: str, rows: list[tuple[Any, ...]]) -> None:
         with self._connect() as con:
-            con.execute("DELETE FROM report_chart_rows WHERE report_key = ?", [report_key])
-            if not rows:
-                return
-            con.executemany(
-                """
-                INSERT INTO report_chart_rows (
-                  report_key, section_key, chart_id,
-                  x_value, y_value, legend, kind, shape,
-                  line_style, line_width, point_size,
-                                    color, y_format, filter1, filter2,
-                                    raw_row_json, row_order
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
+            con.execute("BEGIN TRANSACTION")
+            try:
+                con.execute("DELETE FROM report_chart_rows WHERE report_key = ?", [report_key])
+                if rows:
+                    con.executemany(
+                        """
+                        INSERT INTO report_chart_rows (
+                          report_key, section_key, chart_id,
+                          x_value, y_value, legend, kind, shape,
+                          line_style, line_width, point_size,
+                                            color, y_format, filter1, filter2,
+                                            raw_row_json, row_order
+                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+                con.execute("COMMIT")
+            except Exception:
+                con.execute("ROLLBACK")
+                raise
 
     def query_chart_rows(
         self,

@@ -28,6 +28,31 @@ class UploadFolderData(BaseModel):
     files: list[UploadFolderFileResult] = Field(default_factory=list)
 
 
+class UploadFolderTaskAcceptedData(BaseModel):
+    task_id: str
+    report_key: str
+    status: str
+    total_files: int
+    submitted_at: str
+
+
+class UploadFolderTaskStatusData(BaseModel):
+    task_id: str
+    report_key: str
+    status: str
+    phase: str
+    total_files: int
+    processed_files: int
+    succeeded_files: int
+    failed_files: int
+    submitted_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    files: list[UploadFolderFileResult] = Field(default_factory=list)
+    detail: str | None = None
+    result: UploadFolderData | None = None
+
+
 class ReportListItem(BaseModel):
     report_key: str
     id: str
