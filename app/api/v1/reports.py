@@ -366,9 +366,16 @@ def _run_upload_folder_task(
             section_copy = dict(section)
             section_copy["chapter_key"] = chapter_key
             section_copy["section_key"] = section_key
-            section_copy["title"] = section_copy.get("title") or Path(filename).stem
+            section_title = (
+                _text(section_copy.get("section_name"))
+                or _text(section_copy.get("title"))
+                or Path(filename).stem
+            )
+            section_copy["section_name"] = section_title
+            section_copy["title"] = section_title
             section_copy["content"] = section_copy.get("content") or ""
             section_copy["order"] = section_order
+            chapter_title = _text(section_copy.get("chapter_name")) or chapter_key
             section_copy["content_items"] = section_copy.get("content_items") or {
                 "charts": [],
                 "kind": None,
@@ -379,13 +386,15 @@ def _run_upload_folder_task(
             if bucket is None:
                 bucket = {
                     "chapter_key": chapter_key,
-                    "title": chapter_key,
+                    "title": chapter_title,
                     "subtitle": None,
                     "order": chapter_order,
                     "status": "active",
                     "sections": [],
                 }
                 chapter_buckets[chapter_key] = bucket
+            elif chapter_title and bucket.get("title") == chapter_key:
+                bucket["title"] = chapter_title
             bucket["sections"].append(section_copy)
 
             _append_upload_result(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -8,23 +7,9 @@ from typing import Any
 
 import pandas as pd
 
-REQUIRED_SHEETS = {
-    "report_meta": ["report_key", "name", "type", "status"],
-    "sections": ["section_key", "title", "subtitle", "order_no", "layout"],
-    "charts": [
-        "chart_id",
-        "section_key",
-        "chart_type",
-        "title",
-        "subtitle",
-        "formatter",
-        "option_template_json",
-    ],
-    "chart_points": ["chart_id", "series_name", "point_time", "metric_value"],
-}
-
 TEMPLATE_V2_SHEETS = {"chart_config", "chart_data", "column_dictionary"}
 TEMPLATE_V2_TABLE_SHEETS = {"chart_config", "table_data", "column_dictionary"}
+LATEST_CFG_REQUIRED_FIELDS = {"chapter_name", "section_name"}
 
 
 def _normalize_sheet_name(name: str) -> str:
@@ -38,28 +23,6 @@ def _build_sheet_name_map(xls: pd.ExcelFile) -> dict[str, str]:
         if key and key not in mapped:
             mapped[key] = name
     return mapped
-
-
-def _validate_columns(df: pd.DataFrame, cols: list[str], sheet: str) -> None:
-    missing = [c for c in cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"sheet '{sheet}' missing columns: {', '.join(missing)}")
-
-
-def _load_excel(path: Path) -> dict[str, pd.DataFrame]:
-    try:
-        xls = pd.ExcelFile(path)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"failed to read excel: {exc}") from exc
-
-    frames: dict[str, pd.DataFrame] = {}
-    for sheet, cols in REQUIRED_SHEETS.items():
-        if sheet not in xls.sheet_names:
-            raise ValueError(f"missing required sheet: {sheet}")
-        df = pd.read_excel(xls, sheet_name=sheet)
-        _validate_columns(df, cols, sheet)
-        frames[sheet] = df
-    return frames
 
 
 def _open_excel(path: Path) -> pd.ExcelFile:
@@ -114,11 +77,17 @@ def _parse_cfg_map(df: pd.DataFrame) -> dict[str, str]:
 
     cfg: dict[str, str] = {}
     for row in _df_to_records(df):
-        key = _text(row.get("key"))
+        key = _text(row.get("key")).lower()
         if not key:
             continue
         cfg[key] = _text(row.get("value"))
     return cfg
+
+
+def _require_cfg_fields(cfg: dict[str, str]) -> None:
+    missing = [field for field in sorted(LATEST_CFG_REQUIRED_FIELDS) if not _text(cfg.get(field))]
+    if missing:
+        raise ValueError(f"chart_config missing required keys: {', '.join(missing)}")
 
 
 def _slugify(text: str) -> str:
@@ -199,7 +168,9 @@ def _normalize_template_row(raw: dict[str, Any]) -> dict[str, Any]:
         "x": raw.get("x"),
         "y": _number(raw.get("y")),
         "panel": _text(raw.get("panel"), "Chart 1"),
+        "panel_order": int(_number(raw.get("panel_order")) or 9999),
         "legend": _text(raw.get("legend"), "Series"),
+        "legend_order": int(_number(raw.get("legend_order")) or 9999),
         "type": _text(raw.get("type"), "line").lower(),
         "shape": _text(raw.get("shape"), "none").lower(),
         "line_style": _text(raw.get("line_style"), "solid").lower(),
@@ -326,7 +297,17 @@ def _build_option_for_panel(rows: list[dict[str, Any]], kind: str) -> dict[str, 
     x_values = _build_x_values(rows, kind)
     series: list[dict[str, Any]] = []
 
-    for legend, points in legend_groups.items():
+    legends_with_order = [
+        (
+            min(int(point.get("legend_order") or 9999) for point in points),
+            legend,
+            points,
+        )
+        for legend, points in legend_groups.items()
+    ]
+    legends_with_order.sort(key=lambda item: (item[0], item[1]))
+
+    for _, legend, points in legends_with_order:
         style = points[0]
         point_map = _build_point_map(points)
 
@@ -393,11 +374,14 @@ def _build_template_v2_payload(
     for row in rows:
         grouped[_text(row.get("panel"), "Chart 1")].append(row)
 
-    panel_keys = sorted(grouped.keys())
+    panel_entries: list[tuple[int, str, list[dict[str, Any]]]] = []
+    for panel_key, panel_rows in grouped.items():
+        panel_order = min(int(row.get("panel_order") or 9999) for row in panel_rows)
+        panel_entries.append((panel_order, panel_key, panel_rows))
+    panel_entries.sort(key=lambda item: (item[0], item[1]))
 
     charts: list[dict[str, Any]] = []
-    for idx, panel_key in enumerate(panel_keys, start=1):
-        panel_rows = grouped[panel_key]
+    for idx, (_, panel_key, panel_rows) in enumerate(panel_entries, start=1):
         first = panel_rows[0] if panel_rows else {}
         chart_id = f"chart_{idx}"
 
@@ -421,7 +405,9 @@ def _build_template_v2_payload(
                         {
                             "x": row.get("x"),
                             "y": row.get("y"),
+                            "panel_order": row.get("panel_order"),
                             "legend": row.get("legend"),
+                            "legend_order": row.get("legend_order"),
                             "type": row.get("type"),
                             "shape": row.get("shape"),
                             "line_style": row.get("line_style"),
@@ -438,7 +424,9 @@ def _build_template_v2_payload(
             }
         )
 
-    report_name = cfg.get("title") or path.stem
+    chapter_title = cfg.get("chapter_name") or path.stem
+    section_title = cfg.get("section_name") or chapter_title
+    report_name = cfg.get("title") or chapter_title
     report_type = cfg.get("type") or "analytics"
     report_status = cfg.get("status") or "active"
     subtitle = cfg.get("subtitle") or None
@@ -452,15 +440,17 @@ def _build_template_v2_payload(
         "chapters": [
             {
                 "chapter_key": "chapter_1",
-                "title": report_name,
+                "title": chapter_title,
                 "subtitle": subtitle,
                 "order": 1,
                 "status": report_status,
                 "sections": [
                     {
                         "chapter_key": "chapter_1",
+                        "chapter_name": chapter_title,
+                        "section_name": section_title,
                         "section_key": "section_1",
-                        "title": report_name,
+                        "title": section_title,
                         "subtitle": subtitle,
                         "content": subtitle or "",
                         "order": 1,
@@ -574,7 +564,9 @@ def _build_template_table_payload(
             }
         )
 
-    report_name = cfg.get("title") or path.stem
+    chapter_title = cfg.get("chapter_name") or path.stem
+    section_title = cfg.get("section_name") or chapter_title
+    report_name = cfg.get("title") or chapter_title
     report_type = cfg.get("type") or "analytics"
     report_status = cfg.get("status") or "active"
     subtitle = cfg.get("subtitle") or None
@@ -588,15 +580,17 @@ def _build_template_table_payload(
         "chapters": [
             {
                 "chapter_key": "chapter_1",
-                "title": report_name,
+                "title": chapter_title,
                 "subtitle": subtitle,
                 "order": 1,
                 "status": report_status,
                 "sections": [
                     {
                         "chapter_key": "chapter_1",
+                        "chapter_name": chapter_title,
+                        "section_name": section_title,
                         "section_key": "section_1",
-                        "title": report_name,
+                        "title": section_title,
                         "subtitle": subtitle,
                         "content": subtitle or "",
                         "order": 1,
@@ -633,6 +627,7 @@ def _parse_template_v2(
     dictionary_df = pd.read_excel(xls, sheet_name=sheet_name_map["column_dictionary"])
 
     cfg_map = _parse_cfg_map(cfg_df)
+    _require_cfg_fields(cfg_map)
 
     raw_rows = _df_to_records(data_df)
     if not raw_rows:
@@ -659,57 +654,13 @@ def _parse_table_template_v2(
     data_df = pd.read_excel(xls, sheet_name=sheet_name_map["table_data"])
 
     cfg_map = _parse_cfg_map(cfg_df)
+    _require_cfg_fields(cfg_map)
     raw_rows = _df_to_records(data_df)
     if not raw_rows:
         raise ValueError("sheet 'table_data' is empty")
 
     report_key = override_report_key or cfg_map.get("report_key") or _slugify(path.stem)
     return _build_template_table_payload(path, cfg_map, raw_rows, report_key)
-
-
-def _parse_legacy_template(
-    xls: pd.ExcelFile,
-    override_report_key: str | None,
-    sheet_name_map: dict[str, str],
-) -> dict[str, Any]:
-    frames: dict[str, pd.DataFrame] = {}
-    for sheet, cols in REQUIRED_SHEETS.items():
-        if sheet not in sheet_name_map:
-            raise ValueError(f"missing required sheet: {sheet}")
-        df = pd.read_excel(xls, sheet_name=sheet_name_map[sheet])
-        _validate_columns(df, cols, sheet)
-        frames[sheet] = df
-
-    report_meta = _df_to_records(frames["report_meta"])
-    if not report_meta:
-        raise ValueError("sheet 'report_meta' is empty")
-
-    parsed = {
-        "report_meta": report_meta[0],
-        "sections": _df_to_records(frames["sections"]),
-        "charts": _df_to_records(frames["charts"]),
-        "chart_points": _df_to_records(frames["chart_points"]),
-    }
-
-    if override_report_key:
-        parsed["report_meta"]["report_key"] = override_report_key
-
-    for chart in parsed["charts"]:
-        raw = chart.get("option_template_json")
-        if raw in (None, ""):
-            chart["option_template_json"] = {}
-            continue
-        if isinstance(raw, dict):
-            continue
-        try:
-            chart["option_template_json"] = json.loads(str(raw))
-        except json.JSONDecodeError as exc:
-            chart_id = chart.get("chart_id", "unknown")
-            raise ValueError(
-                f"chart '{chart_id}' option_template_json invalid JSON: {exc}"
-            ) from exc
-
-    return parsed
 
 
 def parse_excel(path: Path, override_report_key: str | None = None) -> dict[str, Any]:
@@ -722,8 +673,5 @@ def parse_excel(path: Path, override_report_key: str | None = None) -> dict[str,
     if TEMPLATE_V2_TABLE_SHEETS.issubset(set(sheet_name_map.keys())):
         return _parse_table_template_v2(xls, path, override_report_key, sheet_name_map)
 
-    if set(REQUIRED_SHEETS.keys()).issubset(set(sheet_name_map.keys())):
-        return _parse_legacy_template(xls, override_report_key, sheet_name_map)
-
     available = ", ".join(xls.sheet_names)
-    raise ValueError(f"unsupported template sheets: {available}")
+    raise ValueError(f"unsupported latest template sheets: {available}")

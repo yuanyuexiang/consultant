@@ -98,7 +98,8 @@ def test_upload_template_v2_auto_build_report(tmp_path):
     template_path = (
         Path(__file__).resolve().parents[2]
         / "data"
-        / "timeseries_chart_data_template.xlsx"
+        / "report20260330"
+        / "chapter1_section3.xlsx"
     )
     assert template_path.exists(), f"template not found: {template_path}"
 
@@ -130,6 +131,10 @@ def test_upload_template_v2_auto_build_report(tmp_path):
     section = payload["chapters"][0]["sections"][0]
     chart = section["content_items"]["charts"][0]
 
+    assert payload["chapters"][0]["title"] == "Portfolio Performance Overview"
+    assert section["title"] == "Vintage Origination Trends"
+    assert section["section_name"] == "Vintage Origination Trends"
+
     assert "filters" in chart["meta"]
     assert "filter1" in chart["meta"]["filters"]
     assert "filter2" in chart["meta"]["filters"]
@@ -151,7 +156,8 @@ def test_section_filter_query_uses_duckdb_rows(tmp_path):
     template_path = (
         Path(__file__).resolve().parents[2]
         / "data"
-        / "timeseries_chart_data_template.xlsx"
+        / "report20260330"
+        / "chapter1_section3.xlsx"
     )
 
     upload_resp = client.post(
@@ -192,7 +198,8 @@ def test_section_filter_query_uses_duckdb_rows(tmp_path):
     assert default_chart["meta"]["filtered_rows_count"] == all_chart["meta"]["filtered_rows_count"]
     assert default_chart["meta"]["selected_filters"] == {"filter1": "ALL", "filter2": "ALL"}
     assert default_section["meta"]["selected_filters"] == {"filter1": "ALL", "filter2": "ALL"}
-    assert grade_chart["meta"]["filtered_rows_count"] == 0
+    assert grade_chart["meta"]["filtered_rows_count"] > 0
+    assert grade_chart["meta"]["selected_filters"] == {"filter1": "Grade 1", "filter2": "36 Month"}
 
 
 def test_upload_table_template_auto_build_report(tmp_path):
@@ -209,7 +216,7 @@ def test_upload_table_template_auto_build_report(tmp_path):
     template_path = (
         Path(__file__).resolve().parents[2]
         / "data"
-        / "report20260327"
+        / "report20260330"
         / "chapter1_section1.xlsx"
     )
     assert template_path.exists(), f"template not found: {template_path}"
@@ -233,6 +240,8 @@ def test_upload_table_template_auto_build_report(tmp_path):
     payload = detail_resp.json()["data"]["payload"]
 
     chart = payload["chapters"][0]["sections"][0]["content_items"]["charts"][0]
+    section = payload["chapters"][0]["sections"][0]
+    assert section["section_name"] == section["title"]
     assert chart["chart_type"] == "table"
     assert chart["table_data"]["rows"]
     assert chart["meta"]["filters"]["filter1"]
@@ -250,7 +259,7 @@ def test_upload_folder_mixed_templates(tmp_path):
     settings.duckdb_file = runtime_dir / "analytics.duckdb"
     settings.ensure_dirs()
 
-    root = Path(__file__).resolve().parents[2] / "data" / "report20260327"
+    root = Path(__file__).resolve().parents[2] / "data" / "report20260330"
     table_path = root / "chapter1_section1.xlsx"
     chart_path = root / "chapter1_section3.xlsx"
     assert table_path.exists(), f"template not found: {table_path}"
@@ -305,6 +314,19 @@ def test_upload_folder_mixed_templates(tmp_path):
     section_keys = {sec.get("section_key") for sec in all_sections if isinstance(sec, dict)}
     assert "section_1" in section_keys
     assert "section_3" in section_keys
+
+    section_titles = {
+        sec.get("section_key"): sec.get("title")
+        for sec in all_sections
+        if isinstance(sec, dict)
+    }
+    section_names = {
+        sec.get("section_key"): sec.get("section_name")
+        for sec in all_sections
+        if isinstance(sec, dict)
+    }
+    assert section_names.get("section_1") == section_titles.get("section_1")
+    assert section_names.get("section_3") == section_titles.get("section_3")
 
     upload_subdir = settings.upload_dir / "folder-mixed-demo"
     assert upload_subdir.exists()
