@@ -90,6 +90,17 @@ def _require_cfg_fields(cfg: dict[str, str]) -> None:
         raise ValueError(f"chart_config missing required keys: {', '.join(missing)}")
 
 
+def _apply_cfg_backward_compat(path: Path, cfg: dict[str, str]) -> dict[str, str]:
+    normalized = dict(cfg)
+    # Older templates may not provide chapter_name/section_name.
+    # Fall back to title or filename to keep parsing backward compatible.
+    chapter_name = _text(normalized.get("chapter_name")) or _text(normalized.get("title")) or path.stem
+    section_name = _text(normalized.get("section_name")) or _text(normalized.get("title")) or chapter_name
+    normalized["chapter_name"] = chapter_name
+    normalized["section_name"] = section_name
+    return normalized
+
+
 def _slugify(text: str) -> str:
     cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in text.strip())
     while "--" in cleaned:
@@ -217,9 +228,11 @@ def _normalize_rows_for_kind(rows: list[dict[str, Any]], kind: str) -> list[dict
         parsed_date = _to_date(x_value)
         if parsed_date is not None:
             normalized.append({**row, "x": _format_date_key(parsed_date)})
-        else:
-            normalized.append(row)
-    return normalized
+    # If at least one point is date-like, keep only normalized date points.
+    # This prevents mixed time/numeric x-values on time axes.
+    if normalized:
+        return normalized
+    return rows
 
 
 def _line_type(value: str) -> str | list[int]:
@@ -286,6 +299,9 @@ def _build_point_map(rows: list[dict[str, Any]]) -> dict[str, float | None]:
         if y is None:
             continue
         mapped[str(row.get("x"))] = y
+        x_num = _number(row.get("x"))
+        if x_num is not None:
+            mapped[str(float(x_num))] = y
     return mapped
 
 
@@ -312,11 +328,18 @@ def _build_option_for_panel(rows: list[dict[str, Any]], kind: str) -> dict[str, 
         point_map = _build_point_map(points)
 
         if kind == "timeseries":
-            data = [
-                [str(item.get("x")), item.get("y")]
-                for item in points
-                if item.get("y") is not None
-            ]
+            # Keep one value per date for each legend to avoid duplicated points
+            # when upstream rows contain repeated x for the same legend.
+            date_point_map: dict[str, float] = {}
+            for item in points:
+                y_value = item.get("y")
+                if y_value is None:
+                    continue
+                x_value = _text(item.get("x"))
+                if not x_value:
+                    continue
+                date_point_map[x_value] = y_value
+            data = [[x_key, y_value] for x_key, y_value in sorted(date_point_map.items())]
         else:
             data = [point_map.get(str(x_value)) for x_value in x_values]
 
@@ -627,6 +650,7 @@ def _parse_template_v2(
     dictionary_df = pd.read_excel(xls, sheet_name=sheet_name_map["column_dictionary"])
 
     cfg_map = _parse_cfg_map(cfg_df)
+    cfg_map = _apply_cfg_backward_compat(path, cfg_map)
     _require_cfg_fields(cfg_map)
 
     raw_rows = _df_to_records(data_df)
@@ -654,6 +678,7 @@ def _parse_table_template_v2(
     data_df = pd.read_excel(xls, sheet_name=sheet_name_map["table_data"])
 
     cfg_map = _parse_cfg_map(cfg_df)
+    cfg_map = _apply_cfg_backward_compat(path, cfg_map)
     _require_cfg_fields(cfg_map)
     raw_rows = _df_to_records(data_df)
     if not raw_rows:

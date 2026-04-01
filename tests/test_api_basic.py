@@ -3,8 +3,10 @@ from time import monotonic, sleep
 
 from fastapi.testclient import TestClient
 
+from app.api.v1.reports import _build_filtered_option
 from app.config import settings
 from app.main import app
+from app.services.parse_service import _build_option_for_panel
 
 client = TestClient(app)
 
@@ -174,14 +176,14 @@ def test_section_filter_query_uses_duckdb_rows(tmp_path):
     assert upload_resp.status_code == 200, upload_resp.json()
 
     all_resp = client.get(
-        "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
+        "/consultant/api/v1/reports/duckdb-filter-demo/chapters/chapter_1/sections/section_1",
         params={"filter1": "All", "filter2": "All"},
     )
     default_resp = client.get(
-        "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
+        "/consultant/api/v1/reports/duckdb-filter-demo/chapters/chapter_1/sections/section_1",
     )
     grade_resp = client.get(
-        "/consultant/api/v1/reports/duckdb-filter-demo/sections/section_1",
+        "/consultant/api/v1/reports/duckdb-filter-demo/chapters/chapter_1/sections/section_1",
         params={"filter1": "Grade 1", "filter2": "36 Month"},
     )
 
@@ -332,3 +334,256 @@ def test_upload_folder_mixed_templates(tmp_path):
     assert upload_subdir.exists()
     assert (upload_subdir / table_path.name).exists()
     assert (upload_subdir / chart_path.name).exists()
+
+
+def test_section_filter_does_not_mix_rows_across_chapters(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    settings.runtime_dir = runtime_dir
+    settings.upload_dir = runtime_dir / "uploads"
+    settings.parse_dir = runtime_dir / "parsed"
+    settings.reports_dir = runtime_dir / "reports"
+    settings.meta_file = runtime_dir / "reports_index.json"
+    settings.duckdb_file = runtime_dir / "analytics.duckdb"
+    settings.ensure_dirs()
+
+    root = Path(__file__).resolve().parents[2] / "data" / "report20260330"
+    chapter1_path = root / "chapter1_section4.xlsx"
+    chapter2_path = root / "chapter2_section4.xlsx"
+    assert chapter1_path.exists(), f"template not found: {chapter1_path}"
+    assert chapter2_path.exists(), f"template not found: {chapter2_path}"
+
+    files = [
+        (
+            "files",
+            (
+                chapter1_path.name,
+                chapter1_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        ),
+        (
+            "files",
+            (
+                chapter2_path.name,
+                chapter2_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        ),
+    ]
+
+    upload_resp = client.post(
+        "/consultant/api/v1/reports/upload-folder",
+        files=files,
+        data={
+            "report_key": "chapter-mix-guard-demo",
+            "report_name": "Chapter Mix Guard Demo",
+            "mode": "replace",
+        },
+    )
+    assert upload_resp.status_code == 200, upload_resp.json()
+    task_id = upload_resp.json()["data"]["task_id"]
+    task_data = _wait_upload_folder_task(task_id)
+    assert task_data["status"] == "succeeded"
+
+    section_resp = client.get(
+        "/consultant/api/v1/reports/chapter-mix-guard-demo/chapters/chapter_1/sections/section_4",
+        params={"filter1": "All", "filter2": "All"},
+    )
+    assert section_resp.status_code == 200, section_resp.json()
+
+    section = section_resp.json()["data"]["section"]
+    assert section["chapter_key"] == "chapter_1"
+
+    charts = section["content_items"]["charts"]
+    chart2 = next(item for item in charts if item.get("title") == "Chart 2")
+    curve7 = next(item for item in chart2["echarts"]["series"] if item.get("name") == "Curve 7")
+
+    forbidden_values = {12335.46, 12647.11, 12754.68, 12849.88, 12881.1, 13399.13, 13826.75}
+    observed = {round(float(point[1]), 2) for point in curve7["data"] if point[1] is not None}
+
+    assert forbidden_values.isdisjoint(observed)
+    assert chart2["meta"]["formatter"] == "%"
+
+
+def test_get_section_supports_chapter_route_and_legacy_route_removed(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    settings.runtime_dir = runtime_dir
+    settings.upload_dir = runtime_dir / "uploads"
+    settings.parse_dir = runtime_dir / "parsed"
+    settings.reports_dir = runtime_dir / "reports"
+    settings.meta_file = runtime_dir / "reports_index.json"
+    settings.duckdb_file = runtime_dir / "analytics.duckdb"
+    settings.ensure_dirs()
+
+    root = Path(__file__).resolve().parents[2] / "data" / "report20260330"
+    chapter1_path = root / "chapter1_section4.xlsx"
+    chapter2_path = root / "chapter2_section4.xlsx"
+
+    files = [
+        (
+            "files",
+            (
+                chapter1_path.name,
+                chapter1_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        ),
+        (
+            "files",
+            (
+                chapter2_path.name,
+                chapter2_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        ),
+    ]
+
+    upload_resp = client.post(
+        "/consultant/api/v1/reports/upload-folder",
+        files=files,
+        data={
+            "report_key": "chapter-key-query-demo",
+            "report_name": "Chapter Key Query Demo",
+            "mode": "replace",
+        },
+    )
+    assert upload_resp.status_code == 200, upload_resp.json()
+    task_id = upload_resp.json()["data"]["task_id"]
+    task_data = _wait_upload_folder_task(task_id)
+    assert task_data["status"] == "succeeded"
+
+    chapter2_resp = client.get(
+        "/consultant/api/v1/reports/chapter-key-query-demo/chapters/chapter_2/sections/section_4",
+        params={"filter1": "All", "filter2": "All"},
+    )
+    assert chapter2_resp.status_code == 200, chapter2_resp.json()
+
+    section = chapter2_resp.json()["data"]["section"]
+    assert section["chapter_key"] == "chapter_2"
+
+    chart2 = next(item for item in section["content_items"]["charts"] if item.get("title") == "Chart 2")
+    curve7 = next(item for item in chart2["echarts"]["series"] if item.get("name") == "Curve 7")
+    observed = {round(float(point[1]), 2) for point in curve7["data"] if point[1] is not None}
+
+    expected_values = {12335.46, 12647.11, 12754.68, 12849.88, 12881.1, 13399.13, 13826.75}
+    assert expected_values.issubset(observed)
+    assert chart2["meta"]["formatter"] == "$"
+
+    legacy_resp = client.get(
+        "/consultant/api/v1/reports/chapter-key-query-demo/sections/section_4",
+        params={"filter1": "All", "filter2": "All"},
+    )
+    assert legacy_resp.status_code == 404
+
+
+def test_build_filtered_option_fallbacks_to_category_for_numeric_x_on_time_axis():
+    option = {
+        "xAxis": {"type": "time"},
+        "series": [],
+    }
+    rows = [
+        {"x": 1, "y": 10.0, "legend": "Curve 1", "type": "line"},
+        {"x": 2, "y": 12.0, "legend": "Curve 1", "type": "line"},
+        {"x": 3, "y": 14.0, "legend": "Curve 1", "type": "line"},
+    ]
+
+    rebuilt = _build_filtered_option(option, rows)
+
+    assert rebuilt["xAxis"]["type"] == "category"
+    assert rebuilt["xAxis"]["data"] == [1.0, 2.0, 3.0]
+    assert rebuilt["series"]
+    assert rebuilt["series"][0]["data"] == [10.0, 12.0, 14.0]
+
+
+def test_section_filter_keeps_numeric_x_chart_data_and_marks_fallback(tmp_path):
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    settings.runtime_dir = runtime_dir
+    settings.upload_dir = runtime_dir / "uploads"
+    settings.parse_dir = runtime_dir / "parsed"
+    settings.reports_dir = runtime_dir / "reports"
+    settings.meta_file = runtime_dir / "reports_index.json"
+    settings.duckdb_file = runtime_dir / "analytics.duckdb"
+    settings.ensure_dirs()
+
+    template_path = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "report20260330"
+        / "chapter2_section2.xlsx"
+    )
+    assert template_path.exists(), f"template not found: {template_path}"
+
+    upload_resp = client.post(
+        "/consultant/api/v1/reports/upload-excel",
+        files={
+            "file": (
+                template_path.name,
+                template_path.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"report_key": "numeric-x-fallback-demo"},
+    )
+    assert upload_resp.status_code == 200, upload_resp.json()
+
+    section_resp = client.get(
+        "/consultant/api/v1/reports/numeric-x-fallback-demo/chapters/chapter_1/sections/section_1",
+        params={"filter1": "All", "filter2": "All"},
+    )
+    assert section_resp.status_code == 200, section_resp.json()
+
+    charts = section_resp.json()["data"]["section"]["content_items"]["charts"]
+    line_charts = [chart for chart in charts if chart.get("chart_type") != "table"]
+    assert line_charts
+
+    chart = line_charts[0]
+    assert chart["meta"]["filtered_rows_count"] > 0
+    assert chart["meta"]["time_axis_fallback_used"] is True
+
+    x_axis = chart["echarts"]["xAxis"]
+    assert x_axis["type"] == "category"
+
+    series = chart["echarts"]["series"]
+    assert series
+    assert any(len(item.get("data") or []) > 0 for item in series)
+
+
+def test_parse_service_non_timeseries_numeric_x_builds_non_empty_data():
+    rows = [
+        {
+            "x": 1,
+            "y": 2.5,
+            "legend": "Curve 1",
+            "legend_order": 1,
+            "type": "line",
+            "shape": "none",
+            "line_style": "solid",
+            "line_width": 1,
+            "point_size": 2,
+            "color": "#4472C4",
+            "y_format": "%",
+        },
+        {
+            "x": 2,
+            "y": 3.5,
+            "legend": "Curve 1",
+            "legend_order": 1,
+            "type": "line",
+            "shape": "none",
+            "line_style": "solid",
+            "line_width": 1,
+            "point_size": 2,
+            "color": "#4472C4",
+            "y_format": "%",
+        },
+    ]
+
+    option = _build_option_for_panel(rows, "facet")
+
+    assert option["xAxis"]["type"] == "category"
+    assert option["xAxis"]["data"] == [1.0, 2.0]
+    assert option["series"]
+    assert option["series"][0]["data"] == [2.5, 3.5]

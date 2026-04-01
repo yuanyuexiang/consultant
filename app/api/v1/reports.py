@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import re
 from threading import Lock
 from uuid import uuid4
@@ -523,6 +523,24 @@ def _collect_category_x(rows: list[dict[str, Any]]) -> list[str | float]:
     return ordered
 
 
+def _normalize_time_x(value: Any) -> str | None:
+    as_num = _number(value)
+    if as_num is not None and 20000 < as_num < 80000:
+        base = datetime(1899, 12, 30)
+        dt = base + timedelta(days=as_num)
+        return dt.strftime("%Y-%m-%d")
+
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        normalized = text.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        return parsed.date().isoformat()
+    except ValueError:
+        return None
+
+
 def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     x_axis = original.get("xAxis")
     if isinstance(x_axis, list):
@@ -530,7 +548,11 @@ def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]])
     if not isinstance(x_axis, dict):
         x_axis = {}
 
-    is_time = x_axis.get("type") == "time"
+    is_time_axis = x_axis.get("type") == "time"
+    # Some parsed charts mark xAxis as "time" even when x values are categories
+    # (e.g. bucket labels). In that case, strict date parsing would drop all points.
+    has_parseable_time = any(_normalize_time_x(item.get("x")) is not None for item in rows)
+    is_time = is_time_axis and has_parseable_time
 
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -542,11 +564,15 @@ def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]])
     for legend, points in grouped.items():
         style = points[0] if points else {}
         if is_time:
-            data = [
-                [_text(item.get("x")), y]
-                for item in points
-                if (y := _number(item.get("y"))) is not None
-            ]
+            # Deduplicate by date within one legend for stable time-series rendering.
+            time_point_map: dict[str, float] = {}
+            for item in points:
+                y = _number(item.get("y"))
+                x = _normalize_time_x(item.get("x"))
+                if y is None or x is None:
+                    continue
+                time_point_map[x] = y
+            data = [[x_key, y_val] for x_key, y_val in sorted(time_point_map.items())]
         else:
             point_map: dict[str, float] = {}
             for item in points:
@@ -555,6 +581,9 @@ def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]])
                 if y is None or not x:
                     continue
                 point_map[x] = y
+                x_num = _number(item.get("x"))
+                if x_num is not None:
+                    point_map[str(float(x_num))] = y
             data = [point_map.get(str(x_value)) for x_value in x_values]
 
         series.append(
@@ -594,8 +623,20 @@ def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]])
     }
 
 
+def _is_time_axis_fallback_needed(option: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
+    x_axis = option.get("xAxis")
+    if isinstance(x_axis, list):
+        x_axis = x_axis[0] if x_axis else {}
+    if not isinstance(x_axis, dict):
+        return False
+    if x_axis.get("type") != "time":
+        return False
+    return bool(rows) and not any(_normalize_time_x(item.get("x")) is not None for item in rows)
+
+
 def _apply_chart_filters(
     report_key: str,
+    chapter_key: str,
     section_key: str,
     chart: dict[str, Any],
     filter1: str,
@@ -606,7 +647,14 @@ def _apply_chart_filters(
     rows: list[dict[str, Any]] = []
 
     if chart_id:
-        rows = duckdb_service.query_chart_rows(report_key, section_key, chart_id, filter1, filter2)
+        rows = duckdb_service.query_chart_rows(
+            report_key,
+            chapter_key,
+            section_key,
+            chart_id,
+            filter1,
+            filter2,
+        )
 
     if not rows:
         meta = chart_copy.get("meta") if isinstance(chart_copy.get("meta"), dict) else {}
@@ -628,8 +676,12 @@ def _apply_chart_filters(
     if chart_copy.get("chart_type") != "table":
         option = chart_copy.get("echarts")
         if isinstance(option, dict):
+            fallback_used = _is_time_axis_fallback_needed(option, rows)
             chart_copy["echarts"] = _build_filtered_option(option, rows)
+        else:
+            fallback_used = False
     else:
+        fallback_used = False
         table_rows: list[dict[str, Any]] = []
         for row in rows:
             raw_row = row.get("_raw_row")
@@ -663,6 +715,7 @@ def _apply_chart_filters(
         **meta,
         "selected_filters": {"filter1": filter1, "filter2": filter2},
         "filtered_rows_count": len(rows),
+        "time_axis_fallback_used": fallback_used,
     }
     return chart_copy
 
@@ -674,6 +727,7 @@ def _apply_section_filters(
     filter2: str,
 ) -> dict[str, Any]:
     section_copy = dict(section)
+    chapter_key = _text(section_copy.get("chapter_key")) or ""
     section_key = _text(section_copy.get("section_key"))
     content_items = section_copy.get("content_items")
     if not isinstance(content_items, dict):
@@ -684,7 +738,7 @@ def _apply_section_filters(
         return section_copy
 
     filtered_charts = [
-        _apply_chart_filters(report_key, section_key, chart, filter1, filter2)
+        _apply_chart_filters(report_key, chapter_key, section_key, chart, filter1, filter2)
         for chart in charts
         if isinstance(chart, dict)
     ]
@@ -698,11 +752,19 @@ def _apply_section_filters(
     return section_copy
 
 
-def _find_section(payload: dict[str, Any], section_key: str) -> dict[str, Any] | None:
+def _find_section(
+    payload: dict[str, Any],
+    section_key: str,
+    chapter_key: str,
+) -> dict[str, Any] | None:
+    expected_chapter_key = _text(chapter_key)
+
     sections = payload.get("sections", [])
     if isinstance(sections, list):
         for sec in sections:
-            if isinstance(sec, dict) and sec.get("section_key") == section_key:
+            if not isinstance(sec, dict) or sec.get("section_key") != section_key:
+                continue
+            if _text(sec.get("chapter_key")) == expected_chapter_key:
                 return sec
 
     chapters = payload.get("chapters", [])
@@ -710,10 +772,30 @@ def _find_section(payload: dict[str, Any], section_key: str) -> dict[str, Any] |
         for chapter in chapters:
             if not isinstance(chapter, dict):
                 continue
+            chapter_match_key = _text(chapter.get("chapter_key"))
+            if chapter_match_key != expected_chapter_key:
+                continue
             for sec in chapter.get("sections", []):
-                if isinstance(sec, dict) and sec.get("section_key") == section_key:
-                    return sec
+                if not isinstance(sec, dict) or sec.get("section_key") != section_key:
+                    continue
+                sec_copy = dict(sec)
+                if not _text(sec_copy.get("chapter_key")):
+                    sec_copy["chapter_key"] = chapter_match_key
+                return sec_copy
+
     return None
+
+
+def _build_section_payload(report_key: str, section_key: str, section: dict[str, Any], filter1: str, filter2: str) -> ApiResponse[SectionPayloadData]:
+    normalized_filter1 = _normalize_filter_value(filter1)
+    normalized_filter2 = _normalize_filter_value(filter2)
+    filtered = _apply_section_filters(
+        report_key,
+        section,
+        normalized_filter1,
+        normalized_filter2,
+    )
+    return ApiResponse(data=SectionPayloadData(section_key=section_key, section=filtered))
 
 
 @router.post("", response_model=ApiResponse[ReportMutationData])
@@ -962,9 +1044,10 @@ def get_report(report_key: str):
     return ApiResponse(data=ReportPayloadData(payload=report_doc["payload"]))
 
 
-@router.get("/{report_key}/sections/{section_key}", response_model=ApiResponse[SectionPayloadData])
-def get_section(
+@router.get("/{report_key}/chapters/{chapter_key}/sections/{section_key}", response_model=ApiResponse[SectionPayloadData])
+def get_chapter_section(
     report_key: str,
+    chapter_key: str,
     section_key: str,
     filter1: str = Query(default="ALL"),
     filter2: str = Query(default="ALL"),
@@ -974,16 +1057,8 @@ def get_section(
     except FileNotFoundError as exc:
         raise _error(404, 1004, "report_key", str(exc)) from exc
 
-    section = _find_section(report_doc["payload"], section_key)
-    if section is not None:
-        normalized_filter1 = _normalize_filter_value(filter1)
-        normalized_filter2 = _normalize_filter_value(filter2)
-        filtered = _apply_section_filters(
-            report_key,
-            section,
-            normalized_filter1,
-            normalized_filter2,
-        )
-        return ApiResponse(data=SectionPayloadData(section_key=section_key, section=filtered))
+    section = _find_section(report_doc["payload"], section_key, chapter_key)
+    if section is None:
+        raise _error(404, 1004, "section_key", f"section not found: {section_key}")
 
-    raise _error(404, 1004, "section_key", f"section not found: {section_key}")
+    return _build_section_payload(report_key, section_key, section, filter1, filter2)

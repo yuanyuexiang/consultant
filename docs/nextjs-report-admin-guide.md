@@ -138,7 +138,7 @@ NEXT_PUBLIC_API_PREFIX=/consultant/api
 
 调用接口：
 
-- `GET /v1/reports/{report_key}/sections/{section_key}`
+- `GET /v1/reports/{report_key}/chapters/{chapter_key}/sections/{section_key}`
 
 展示重点：
 

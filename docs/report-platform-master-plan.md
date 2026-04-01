@@ -217,7 +217,7 @@
 3. POST /v1/reports/{report_key}/publish （发布当前组装结果）
 4. GET /v1/reports （查询报告列表）
 5. GET /v1/reports/{report_key} （查询报告详情）
-6. GET /v1/reports/{report_key}/sections/{section_key}
+6. GET /v1/reports/{report_key}/chapters/{chapter_key}/sections/{section_key}
 
 当前阶段约定：
 

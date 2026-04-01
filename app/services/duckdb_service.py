@@ -25,6 +25,7 @@ class DuckDBService:
                 """
                 CREATE TABLE IF NOT EXISTS report_chart_rows (
                   report_key TEXT NOT NULL,
+                                    chapter_key TEXT,
                   section_key TEXT NOT NULL,
                   chart_id TEXT NOT NULL,
                   x_value TEXT,
@@ -44,6 +45,7 @@ class DuckDBService:
                 )
                 """
             )
+            con.execute("ALTER TABLE report_chart_rows ADD COLUMN IF NOT EXISTS chapter_key TEXT")
             con.execute("ALTER TABLE report_chart_rows ADD COLUMN IF NOT EXISTS raw_row_json TEXT")
             con.execute("ALTER TABLE report_chart_rows ADD COLUMN IF NOT EXISTS row_order BIGINT")
             # Known DuckDB issue: DELETE with this secondary index can trigger fatal
@@ -77,12 +79,12 @@ class DuckDBService:
                     con.executemany(
                         """
                         INSERT INTO report_chart_rows (
-                          report_key, section_key, chart_id,
+                                                    report_key, chapter_key, section_key, chart_id,
                           x_value, y_value, legend, kind, shape,
                           line_style, line_width, point_size,
                                             color, y_format, filter1, filter2,
                                             raw_row_json, row_order
-                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         rows,
                     )
@@ -94,6 +96,7 @@ class DuckDBService:
     def query_chart_rows(
         self,
         report_key: str,
+        chapter_key: str,
         section_key: str,
         chart_id: str,
         filter1: str,
@@ -117,10 +120,10 @@ class DuckDBService:
                             raw_row_json,
                             row_order
             FROM report_chart_rows
-            WHERE report_key = ? AND section_key = ? AND chart_id = ?
+            WHERE report_key = ? AND chapter_key = ? AND section_key = ? AND chart_id = ?
             """
         ]
-        params: list[Any] = [report_key, section_key, chart_id]
+        params: list[Any] = [report_key, chapter_key, section_key, chart_id]
 
         normalized_filter1 = (filter1 or "").strip() or "ALL"
         normalized_filter2 = (filter2 or "").strip() or "ALL"
@@ -168,9 +171,11 @@ class DuckDBService:
         for chapter in chapters:
             if not isinstance(chapter, dict):
                 continue
+            chapter_key = str(chapter.get("chapter_key") or "")
             for section in chapter.get("sections", []):
                 if not isinstance(section, dict):
                     continue
+                section_chapter_key = str(section.get("chapter_key") or chapter_key)
                 section_key = str(section.get("section_key") or "")
                 charts = (section.get("content_items") or {}).get("charts", [])
                 if not isinstance(charts, list):
@@ -193,6 +198,7 @@ class DuckDBService:
                         rows.append(
                             (
                                 report_key,
+                                section_chapter_key,
                                 section_key,
                                 chart_id,
                                 self._text(item.get("x")),

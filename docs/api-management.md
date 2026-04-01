@@ -71,10 +71,10 @@ curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics"
 
 ### 3.3 Get One Section
 
-- Endpoint: `GET /v1/reports/{report_key}/sections/{section_key}`
+- Endpoint: `GET /v1/reports/{report_key}/chapters/{chapter_key}/sections/{section_key}`
 
 ```bash
-curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics/sections/origination_trends"
+curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics/chapters/chapter_1/sections/origination_trends"
 ```
 
 ## 4. Report CRUD APIs
