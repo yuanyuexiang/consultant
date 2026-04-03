@@ -44,4 +44,4 @@ curl "http://127.0.0.1:8000/consultant/api/v1/reports/data-analytics"
 uv run pytest
 ```
 
-docker buildx build --platform linux/amd64,linux/arm64 -t yuanyuexiang/consultant:v4 .
+docker buildx build --platform linux/amd64,linux/arm64 -t auricintelligence/consultant:v6 .
