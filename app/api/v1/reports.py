@@ -558,6 +558,11 @@ def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]])
     for row in rows:
         grouped[_text(row.get("legend")) or "Series"].append(row)
 
+    source_series = original.get("series") if isinstance(original.get("series"), list) else []
+    first_source_series = source_series[0] if source_series and isinstance(source_series[0], dict) else {}
+    inherited_mark_area = first_source_series.get("markArea") if isinstance(first_source_series, dict) else None
+    inherited_mark_line = first_source_series.get("markLine") if isinstance(first_source_series, dict) else None
+
     x_values = [] if is_time else _collect_category_x(rows)
     series: list[dict[str, Any]] = []
 
@@ -604,6 +609,13 @@ def _build_filtered_option(original: dict[str, Any], rows: list[dict[str, Any]])
                 },
             }
         )
+
+    if series:
+        # Keep parser-generated annotations stable after filter-based series rebuild.
+        if isinstance(inherited_mark_area, dict):
+            series[0]["markArea"] = inherited_mark_area
+        if isinstance(inherited_mark_line, dict):
+            series[0]["markLine"] = inherited_mark_line
 
     return {
         **original,
@@ -700,12 +712,15 @@ def _apply_chart_filters(
 
         table_data = chart_copy.get("table_data")
         columns: list[dict[str, str]] = []
+        preserved_table_data: dict[str, Any] = {}
         if isinstance(table_data, dict) and isinstance(table_data.get("columns"), list):
+            preserved_table_data = dict(table_data)
             columns = [item for item in table_data.get("columns", []) if isinstance(item, dict)]
         if not columns and table_rows:
             columns = [{"key": key, "title": key} for key in table_rows[0].keys()]
 
         chart_copy["table_data"] = {
+            **preserved_table_data,
             "columns": columns,
             "rows": table_rows,
         }
