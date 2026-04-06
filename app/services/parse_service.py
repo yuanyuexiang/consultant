@@ -800,12 +800,6 @@ def _build_option_for_panel(
         if mark_line:
             series[0]["markLine"] = mark_line
 
-    # Also keep top-level copies for compatibility with existing clients/options.
-    if mark_area:
-        option["markArea"] = mark_area
-    if mark_line:
-        option["markLine"] = mark_line
-
     return option
 
 

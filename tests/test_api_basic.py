@@ -308,7 +308,12 @@ def test_upload_folder_mixed_templates(tmp_path):
     upload_resp = client.post(
         "/consultant/api/v1/reports/upload-folder",
         files=files,
-        data={"report_key": "folder-mixed-demo", "report_name": "Folder Mixed Demo", "mode": "replace"},
+        data={
+            "report_key": "folder-mixed-demo",
+            "report_name": "Folder Mixed Demo",
+            "report_type": "Facilities",
+            "mode": "replace",
+        },
     )
     assert upload_resp.status_code == 200, upload_resp.json()
     body = upload_resp.json()
@@ -397,6 +402,7 @@ def test_section_filter_does_not_mix_rows_across_chapters(tmp_path):
         data={
             "report_key": "chapter-mix-guard-demo",
             "report_name": "Chapter Mix Guard Demo",
+            "report_type": "Facilities",
             "mode": "replace",
         },
     )
@@ -474,6 +480,7 @@ def test_get_section_supports_chapter_route_and_legacy_route_removed(tmp_path):
         data={
             "report_key": "chapter-key-query-demo",
             "report_name": "Chapter Key Query Demo",
+            "report_type": "Facilities",
             "mode": "replace",
         },
     )

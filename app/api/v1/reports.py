@@ -38,6 +38,7 @@ repo = StorageRepository()
 upload_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="upload-folder")
 upload_tasks: dict[str, dict[str, Any]] = {}
 upload_tasks_lock = Lock()
+ALLOWED_REPORT_TYPES = {"Deals", "Facilities", "Tools"}
 
 
 def _flatten_chapter_sections(chapters: list[dict]) -> list[dict]:
@@ -317,6 +318,7 @@ def _run_upload_folder_task(
     task_id: str,
     report_key: str,
     report_name: str,
+    report_type: str,
     mode: str,
     staged_files: list[tuple[str, Path]],
 ) -> None:
@@ -440,7 +442,7 @@ def _run_upload_folder_task(
             "id": f"rpt_{report_key.replace('-', '_')}",
             "report_key": report_key,
             "name": report_name,
-            "type": "analytics",
+            "type": report_type,
             "status": "active",
             "chapters": incoming_chapters,
         }
@@ -453,6 +455,7 @@ def _run_upload_folder_task(
                 payload = {
                     **existing_payload,
                     "name": report_name,
+                    "type": report_type,
                     "chapters": _merge_chapters(
                         existing_chapters if isinstance(existing_chapters, list) else [],
                         incoming_chapters,
@@ -953,6 +956,7 @@ async def upload_folder(
     files: list[UploadFile] = File(...),
     report_key: str = Form(...),
     report_name: str = Form(...),
+    report_type: str = Form(...),
     mode: str = Form(default="replace"),
 ):
     if mode not in {"replace", "append"}:
@@ -963,6 +967,15 @@ async def upload_folder(
     report_name_text = _text(report_name)
     if not report_name_text:
         raise _error(400, 1001, "report_name", "report_name is required")
+
+    report_type_text = _text(report_type)
+    if report_type_text not in ALLOWED_REPORT_TYPES:
+        raise _error(
+            400,
+            1001,
+            "report_type",
+            "report_type must be one of: Deals, Facilities, Tools",
+        )
 
     key_raw = _text(report_key)
     if not key_raw:
@@ -1023,7 +1036,15 @@ async def upload_folder(
     with upload_tasks_lock:
         upload_tasks[task_id] = queued
 
-    upload_executor.submit(_run_upload_folder_task, task_id, key, report_name_text, mode, staged_files)
+    upload_executor.submit(
+        _run_upload_folder_task,
+        task_id,
+        key,
+        report_name_text,
+        report_type_text,
+        mode,
+        staged_files,
+    )
 
     return ApiResponse(
         data=UploadFolderTaskAcceptedData(
