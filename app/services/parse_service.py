@@ -852,6 +852,10 @@ def _build_template_v2_payload(
                     "formatter": _text(first.get("y_format")) or None,
                     "x_label": _text(first.get("x_label")) or None,
                     "y_label": _text(first.get("y_label")) or None,
+                    "filter_labels": {
+                        "filter1": _text(cfg.get("filter1_label")),
+                        "filter2": _text(cfg.get("filter2_label")),
+                    },
                     "filters": {
                         "filter1": _filter_options(panel_rows, "filter1"),
                         "filter2": _filter_options(panel_rows, "filter2"),
@@ -1016,6 +1020,10 @@ def _build_template_table_payload(
                     "source_template": "table",
                     "panel": panel_key,
                     "formatter": _text(first.get("y_format")) or None,
+                    "filter_labels": {
+                        "filter1": _text(cfg.get("filter1_label")),
+                        "filter2": _text(cfg.get("filter2_label")),
+                    },
                     "filters": {
                         "filter1": _filter_options(source_rows, "filter1"),
                         "filter2": _filter_options(source_rows, "filter2"),
