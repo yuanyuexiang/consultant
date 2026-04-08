@@ -38,7 +38,7 @@ repo = StorageRepository()
 upload_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="upload-folder")
 upload_tasks: dict[str, dict[str, Any]] = {}
 upload_tasks_lock = Lock()
-ALLOWED_REPORT_TYPES = {"Deals", "Facilities", "Tools"}
+ALLOWED_REPORT_TYPES = {"Deals", "Facilities", "Tools", "Performance"}
 
 
 def _flatten_chapter_sections(chapters: list[dict]) -> list[dict]:
@@ -974,7 +974,7 @@ async def upload_folder(
             400,
             1001,
             "report_type",
-            "report_type must be one of: Deals, Facilities, Tools",
+            "report_type must be one of: Deals, Facilities, Tools, Performance",
         )
 
     key_raw = _text(report_key)

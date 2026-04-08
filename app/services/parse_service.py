@@ -375,7 +375,7 @@ def _normalize_shaded_x(value: Any, kind: str, row_number: int, field: str) -> s
         return None
 
     if kind == "timeseries":
-        parsed_date = _to_date(text)
+        parsed_date = _to_date(value)
         if parsed_date is None:
             raise ValueError(f"sheet 'shaded_regions' row {row_number} column '{field}' must be date")
         return _format_date_key(parsed_date)
@@ -512,12 +512,15 @@ def _build_mark_area(shaded_regions: list[dict[str, Any]]) -> dict[str, Any] | N
         if region.get("y_end") is not None:
             end["yAxis"] = region["y_end"]
 
-        # Fill missing boundaries explicitly to maximize ECharts compatibility
-        # across versions when rendering full-height/full-width shaded ranges.
+        # Fill missing X boundaries explicitly for stable left/right range semantics.
         if "xAxis" in start and "xAxis" not in end:
             end["xAxis"] = "max"
         if "xAxis" in end and "xAxis" not in start:
             start["xAxis"] = "min"
+
+        # For Y boundaries:
+        # - If one side is provided, expand the other side to keep a valid band.
+        # - If both are omitted, keep Y unbounded so the shaded region spans full chart height.
         if "yAxis" in start and "yAxis" not in end:
             end["yAxis"] = "max"
         if "yAxis" in end and "yAxis" not in start:
@@ -526,9 +529,6 @@ def _build_mark_area(shaded_regions: list[dict[str, Any]]) -> dict[str, Any] | N
         if "xAxis" not in start and "xAxis" not in end:
             start["xAxis"] = "min"
             end["xAxis"] = "max"
-        if "yAxis" not in start and "yAxis" not in end:
-            start["yAxis"] = "min"
-            end["yAxis"] = "max"
 
         label = _text(region.get("label"))
         if label:
